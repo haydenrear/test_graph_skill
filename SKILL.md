@@ -220,6 +220,23 @@ Prefer the `[tool.uv.sources]` form — it gives you dependency isolation, edita
 
 Whether you import user code via `//SOURCES` or `[tool.uv.sources]`, the relative path from `test_graph/sources/<script>` to the user-repo root is always `../..`. Keep the depth at two levels and document any deviation in the script's file header.
 
+## Toolchain (jbang + uv)
+
+The plugin resolves both runtimes at task-execution time — using whatever's on `PATH` by default, and downloading to `<test_graph>/.bin/` only when a version override is requested that doesn't match PATH, or when the tool isn't installed. Every run logs its choice:
+
+```
+[toolchain] jbang=0.137.0 (path: /opt/homebrew/bin/jbang)
+[toolchain] uv=0.7.2 (path: /opt/homebrew/bin/uv)
+```
+
+Pin a version with Gradle properties when you need reproducibility:
+
+```bash
+./gradlew smoke -Poverride-jbang-version=0.118.0 -Poverride-uv-version=0.6.0
+```
+
+The downloaded binaries live at `<test_graph>/.bin/jbang-<v>/bin/jbang` and `<test_graph>/.bin/uv-<v>/uv`. `.bin/` is gitignored. Full table in [`reference.md`](reference.md) → **Toolchain**.
+
 ## Picking a kind
 
 | Kind        | Use for                                           |
