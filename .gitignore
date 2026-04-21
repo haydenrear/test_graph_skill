@@ -14,3 +14,4 @@ project_sdk_sources/sdk/python/**/__pycache__/
 project_sdk_sources/sdk/python/**/*.egg-info/
 project_sdk_sources/sdk/python/dist/
 project_sdk_sources/sdk/python/build/
+**/__pycache__/**
