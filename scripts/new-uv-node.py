@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Create a new uv (Python) validation node from a template.
 
-Run from inside a scaffolded test_graph project (cwd anywhere within it).
+Auto-detects the scaffolded test_graph project (cwd anywhere within it,
+or the project repo root containing a ``test_graph/`` subdir, or pass
+``--test-graph-root`` / set ``TEST_GRAPH_ROOT``).
 
 Usage:
     new-uv-node.py <node-id> <kind>
@@ -14,6 +16,7 @@ import argparse
 import sys
 
 from _common import (
+    add_test_graph_root_arg,
     render_template,
     snake_name_from_id,
     target_project_root,
@@ -31,6 +34,7 @@ def main() -> int:
         "kind",
         help="node kind (testbed | fixture | action | assertion | evidence | report)",
     )
+    add_test_graph_root_arg(parser)
     args = parser.parse_args()
 
     validate_node_id(args.node_id)
@@ -38,7 +42,7 @@ def main() -> int:
 
     file_stem = snake_name_from_id(args.node_id)
     template = templates_dir() / "uv-node.py.template"
-    out_path = target_sources_dir() / f"{file_stem}.py"
+    out_path = target_sources_dir(args.test_graph_root) / f"{file_stem}.py"
 
     if out_path.exists():
         sys.exit(f"error: node already exists: {out_path}")
@@ -54,7 +58,7 @@ def main() -> int:
         )
     )
 
-    rel = out_path.relative_to(target_project_root())
+    rel = out_path.relative_to(target_project_root(args.test_graph_root))
     print(f"created {rel}")
     print("next steps:")
     print("  1. fill in the body")

@@ -19,12 +19,49 @@ This whole repo IS the skill. The skill's scripts live in `scripts/`, templates 
 - Data flows downstream through an accumulated `Context[]` — each upstream node contributes one `ContextItem { nodeId, data }`. Publish with `NodeResult.publish(k, v)`; read with `ctx.get(upstreamId, key)`.
 - Reports are one JSON envelope per node, aggregated into `summary.json` per run, all under `build/validation-reports/<runId>/` of the scaffolded project.
 
+## Dependency nodes are the reuse seam
+
+Anything that provisions or tears down infrastructure — Docker containers, language runtimes, registries, gateways, package-manager state, port allocations, fixture data — belongs in a **dependency node** (typically `kind=testbed` or `kind=fixture`). Action / assertion nodes then `dependsOn(...)` those, and the same dependency node is shared across every graph that needs it.
+
+A node like `app.running` should be a single `sources/AppRunning.java` (or `.py`) that's reused unmodified by `smoke`, `regression`, `nightly`, etc. — not duplicated. That's the whole point of the topo-sorted DAG: any node, no matter how heavy its setup, runs once per execution and downstream nodes pick up its `Context` output.
+
+Don't push infrastructure work into action / assertion nodes. If two graphs need the same testbed, they should both depend on the same testbed node. If you find yourself copy-pasting setup logic between nodes, extract a new dependency node and have both depend on it.
+
+## Test contracts run against real code
+
+Node scripts live next to the user's repo (`<user-repo>/test_graph/sources/`), so they can `//SOURCES ../../src/main/java/...` (JBang) or `[tool.uv.sources]` at `../..` (Python) to pull production sources directly into the validation runtime. That means:
+
+- The test exercises the same classes / modules the production app does — no parallel "test-only" port of the contract.
+- Refactors in production code surface as compile breaks in the node (JBang) or import errors (uv), not as silent test rot.
+- Contracts are visible: a node's `//SOURCES` block lists exactly which production files it depends on.
+
+Pull in only the specific files / packages a node needs (be specific with globs); see the **Importing user code into a node** section below for the patterns.
+
+## Don't modify `sdk/` or `build-logic/` in the scaffold
+
+The `sdk/` (Java + Python helper packages) and `build-logic/` (Gradle plugin, tasks, executors, toolchain) trees in a scaffolded project are vendored copies of this skill's `project_sdk_sources/` payload. They're planned to live in a central artifact and stay byte-identical across every project that scaffolds from this skill — that's how cross-project upgrades (toolchain pinning, new tasks, plugin fixes) ship to all consumers at once.
+
+Edit only `sources/` and `build.gradle.kts` in the scaffolded project. If you genuinely need to change behavior under `sdk/` or `build-logic/`, the change belongs in **this** skill repo's `project_sdk_sources/` and gets re-scaffolded (or rsynced) into consumers — never patched in-place in a downstream project.
+
 ## Two roots the scripts care about
 
 - **`<skill>`** — this repo (where SKILL.md / scripts/ / templates/ / project_sdk_sources/ live).
 - **`<test_graph>`** — the scaffolded project the user is operating on (has a `settings.gradle.kts`). Typically lives at `<user-repo>/test_graph/`.
 
-The scripts detect `<test_graph>` automatically by walking up from cwd looking for `settings.gradle.kts`. Always run non-scaffold scripts from inside the scaffolded project.
+The scripts auto-detect `<test_graph>` so most invocations work without flags. Resolution order (highest precedence first):
+
+1. `--test-graph-root` / `-R` flag.
+2. `TEST_GRAPH_ROOT` env var.
+3. Walk up from cwd looking for `settings.gradle.kts` — wins when you're inside the scaffold.
+4. **Project repo root convenience** — fall back to `<cwd>/test_graph/` if it carries `settings.gradle.kts` and a `build.gradle.kts` that mentions `validationGraph`. So a user at `<user-repo>/` can run scripts directly without flags:
+   ```bash
+   cd <user-repo>                                            # NOT <user-repo>/test_graph
+   <skill>/scripts/discover.py                               # → targets ./test_graph/
+   <skill>/scripts/run.py smoke                              # → ./test_graph/
+   <skill>/scripts/run.py --all                              # every graph, sequentially
+   <skill>/scripts/clean.py                                  # wipes ./test_graph/build/
+   ```
+   The `validationGraph` substring check guards against picking up an unrelated `test_graph` directory.
 
 ## Workflows
 
@@ -122,6 +159,43 @@ cat /tmp/spec.json
 ```
 
 Output lives at `<test_graph>/build/validation-reports/<runId>/` — one envelope per node under `envelope/`, plus a unified `summary.json` after `validationReport` runs.
+
+### 7. Run every registered graph
+
+```bash
+<skill>/scripts/run.py --all
+# or directly:
+./gradlew validationRunAll
+```
+
+`validationRunAll` fans out to every `testGraph(...)` declared in `build.gradle.kts` and chains them serially in declaration order — so testbed nodes don't compete for shared local resources when Gradle's worker pool is wider than 1. The task is `finalizedBy validationReport`, so a single `summary.json` is written across all graphs at the end.
+
+### 8. Clean the build directory
+
+```bash
+./gradlew clean
+```
+
+Plain `clean` from Gradle's `base` plugin (which the validation plugin auto-applies). Removes `build/` — including `build/validation-reports/`, so prior runs are wiped. Use before a fresh `validationRunAll` if you want a clean baseline.
+
+## Where validation reports live
+
+Every run writes under the scaffolded project's `build/` directory:
+
+```
+<test_graph>/build/validation-reports/<runId>/
+  envelope/
+    <node-id>.json              # one per executed node — status, assertions, metrics, published, logs[]
+  node-logs/                    # subprocess stdout+stderr captured per (node, label)
+    <node-id>.<label>.log       # e.g. ci.logged.in.login.log
+  summary.json                  # aggregate (written by validationReport / finalizedBy)
+  docs/<graph>.dot              # graphviz source from `discover.py <graph>`
+  docs/<graph>.png              # rendered if graphviz `dot` is on PATH
+```
+
+`<runId>` is a timestamp like `20260428-184103`, so multiple runs accumulate side-by-side until `clean` (or `clean.py`) wipes them.
+
+The structured `envelope/<node-id>.json` carries everything a CI artifact uploader needs — including absolute paths to any captured subprocess logs, so a downstream artifact bundle round-trips losslessly. CI workflows should upload `build/validation-reports/` wholesale.
 
 ## Importing user code into a node
 
