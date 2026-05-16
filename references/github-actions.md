@@ -5,6 +5,8 @@ GitHub Actions workflow that installs the test-graph skill with
 skill-manager, resolves the scaffold symlinks, discovers the graph, runs it,
 and uploads `test_graph/build/validation-reports/` as an artifact.
 
+For the normal local workflow, start with [`workflows.md`](workflows.md).
+
 ## Scaffold a Workflow
 
 From the project repo root, or from anywhere inside `test_graph/`:
