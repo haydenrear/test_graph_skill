@@ -38,6 +38,17 @@ Use the upstream skill's scripts from inside this directory:
 
 Or go straight to Gradle tasks (listed above).
 
+## GitHub Actions
+
+From your repo root, scaffold a CI workflow with the upstream skill:
+
+```bash
+<skill>/scripts/github-action.py
+```
+
+The workflow installs the test-graph skill on the runner so the `sdk/` and
+`build-logic/` symlinks resolve before Gradle runs.
+
 ## Importing your project's code
 
 This directory lives at `<your-repo-root>/test_graph/`. From any node

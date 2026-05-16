@@ -8,7 +8,7 @@ A polyglot validation graph system, shipped as an agent skill. Scaffold a new te
 - A Gradle plugin + Kotlin DSL composes nodes into named **test graphs**, each registered as a Gradle task.
 - A `Context[]` carries data downstream across runtimes, so a JBang assertion can read values a uv fixture published.
 
-Read [`SKILL.md`](SKILL.md) for the agent workflow, [`reference.md`](reference.md) for the full API, [`constitution.md`](constitution.md) for durable principles, and [`initial-spec.md`](initial-spec.md) for the v0 design.
+Read [`SKILL.md`](SKILL.md) for the agent workflow, [`reference.md`](reference.md) for the full API, [`github-actions.md`](github-actions.md) for CI setup, [`constitution.md`](constitution.md) for durable principles, and [`initial-spec.md`](initial-spec.md) for the v0 design.
 
 ## Layout (this repo IS the skill)
 
@@ -17,7 +17,7 @@ SKILL.md                  skill-facing instructions for the agent
 reference.md              full API / DSL / task reference
 constitution.md           durable principles & invariants
 initial-spec.md           v0 design notes
-scripts/                  skill scripts (scaffold, new-*-node, discover, run)
+scripts/                  skill scripts (scaffold, GitHub Actions, new nodes, discover, run)
 templates/                node templates (jbang, uv)
 project_sdk_sources/      THE SCAFFOLD PAYLOAD — copied verbatim on scaffold
   build.gradle.kts          example `testGraph("smoke") { ... }`
@@ -63,6 +63,14 @@ cd <repo-root>/test_graph
 ```
 
 `<skill>` here is the path to this repo.
+
+## Add GitHub Actions
+
+```bash
+<skill>/scripts/github-action.py <repo-root>
+```
+
+Creates `.github/workflows/test-graph.yml` for a scaffolded project. The workflow installs the test-graph skill with skill-manager, resolves the scaffold symlinks, runs graph discovery/execution, and uploads validation reports. See [`github-actions.md`](github-actions.md).
 
 ## The DSL in one glance
 

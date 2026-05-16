@@ -7,7 +7,7 @@ description: Work with the test-graph validation system — scaffold a test_grap
 
 You are helping the user build or extend a **test_graph** project — a polyglot validation graph where each node is a small executable script (JBang or uv) that self-describes its metadata and returns a structured `NodeResult`. A Gradle plugin discovers, orders, and runs the graph; reports aggregate through a common envelope.
 
-This whole repo IS the skill. The skill's scripts live in `scripts/`, templates in `templates/`, and the scaffold payload (what gets copied into the user's repo) lives in `project_sdk_sources/`. Read [`constitution.md`](constitution.md) (durable principles) and [`initial-spec.md`](initial-spec.md) (v0 design) for background. Full API / DSL / task reference: [`reference.md`](reference.md).
+This whole repo IS the skill. The skill's scripts live in `scripts/`, templates in `templates/`, and the scaffold payload (what gets copied into the user's repo) lives in `project_sdk_sources/`. Read [`constitution.md`](constitution.md) (durable principles) and [`initial-spec.md`](initial-spec.md) (v0 design) for background. Full API / DSL / task reference: [`reference.md`](reference.md). GitHub Actions setup lives in [`github-actions.md`](github-actions.md).
 
 ## Core mental model (60 seconds)
 
@@ -93,7 +93,41 @@ cd <user-repo-root>/test_graph
 ./gradlew smoke                             # run the example graph
 ```
 
-### 2. Create a new JBang (Java) node
+### 2. Add GitHub Actions CI for a scaffolded project
+
+Use when: the project already has `<repo>/test_graph/` and should run graph
+validation on GitHub Actions.
+
+```bash
+<skill>/scripts/github-action.py <user-repo-root>
+# or run from <user-repo-root> / <user-repo-root>/test_graph and omit the arg
+<skill>/scripts/github-action.py
+```
+
+Creates `<user-repo-root>/.github/workflows/test-graph.yml`. The workflow
+installs `skill-manager`, installs this test-graph skill into the runner,
+resolves the scaffold's `sdk/` and `build-logic/` symlinks, runs
+`discover.py`, runs every registered graph with `run.py --all`, and uploads
+`test_graph/build/validation-reports/`.
+
+For a narrower CI task:
+
+```bash
+<skill>/scripts/github-action.py --graph smoke
+```
+
+For private skill installs:
+
+```bash
+<skill>/scripts/github-action.py --token-secret SKILL_MANAGER_GITHUB_TOKEN
+```
+
+The default symlink mode repairs the checkout symlinks to the runner's
+skill-manager install. Use `--symlink-mode preserve` when the checked-in
+symlinks already point under a fixed `SKILL_MANAGER_HOME` path and the
+runner should create that same path. Full details: [`github-actions.md`](github-actions.md).
+
+### 3. Create a new JBang (Java) node
 
 Run from inside the scaffolded test_graph project.
 
@@ -108,7 +142,7 @@ After creation: edit the file to fill in the body, then reference it from a `tes
 
 **Kinds**: `testbed | fixture | action | assertion | evidence | report` — see **Picking a kind** below.
 
-### 3. Create a new uv (Python) node
+### 4. Create a new uv (Python) node
 
 ```bash
 <skill>/scripts/new-uv-node.py <node-id> <kind>
@@ -117,7 +151,7 @@ After creation: edit the file to fill in the body, then reference it from a `tes
 
 Creates `sources/<snake_name>.py` in the active test_graph project. Script name snake-cases the node id.
 
-### 4. Compose a test graph in `build.gradle.kts`
+### 5. Compose a test graph in `build.gradle.kts`
 
 Edit the scaffolded project's `build.gradle.kts`:
 
@@ -137,7 +171,7 @@ validationGraph {
 
 Every `testGraph(...)` registers a Gradle task with the same name. Multiple graphs are allowed per project.
 
-### 5. Discover graphs and plans
+### 6. Discover graphs and plans
 
 ```bash
 <skill>/scripts/discover.py                     # list all registered test graphs
@@ -158,7 +192,7 @@ uv run sources/my_node.py --describe-out=/tmp/spec.json
 cat /tmp/spec.json
 ```
 
-### 6. Run a graph
+### 7. Run a graph
 
 ```bash
 <skill>/scripts/run.py <graph-name>
@@ -168,7 +202,7 @@ cat /tmp/spec.json
 
 Output lives at `<test_graph>/build/validation-reports/<runId>/` — one envelope per node under `envelope/`, plus a unified `summary.json` and `report.md` written inline by the graph task at the end of plan execution. Run `./gradlew validationReport` to re-render those rollups for every existing run dir (e.g. after editing an envelope by hand).
 
-### 7. Run every registered graph
+### 8. Run every registered graph
 
 ```bash
 <skill>/scripts/run.py --all
@@ -178,7 +212,7 @@ Output lives at `<test_graph>/build/validation-reports/<runId>/` — one envelop
 
 `validationRunAll` fans out to every `testGraph(...)` declared in `build.gradle.kts` and chains them serially in declaration order — so testbed nodes don't compete for shared local resources when Gradle's worker pool is wider than 1. Each per-graph task writes its own `summary.json` + `report.md` inline; `validationRunAll` doesn't need a finalizer (a shared finalizer would dedupe across graph tasks and leave some run dirs without a report).
 
-### 8. Clean the build directory
+### 9. Clean the build directory
 
 ```bash
 ./gradlew clean
@@ -384,3 +418,4 @@ Before merging work that touches `sources/` or `build.gradle.kts`, confirm:
 - [`constitution.md`](constitution.md) — durable principles and invariants.
 - [`initial-spec.md`](initial-spec.md) — v0 design, repo layout, Gradle DSL.
 - [`reference.md`](reference.md) — full metadata / SDK / DSL / task reference.
+- [`github-actions.md`](github-actions.md) — GitHub Actions scaffold and symlink setup.
