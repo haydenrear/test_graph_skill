@@ -195,6 +195,16 @@ resources when Gradle has a wider worker pool.
 Each graph task writes its own `summary.json` and `report.md` inline at the end
 of execution.
 
+If a graph fails because Python, uv, `PATH`, virtualenv activation, or Gradle
+daemon state looks inconsistent, see
+[`debug-python-uv-env.md`](debug-python-uv-env.md). In agent or CI contexts,
+prefer an explicit `python3` invocation for the skill wrapper and disable the
+Gradle daemon while debugging:
+
+```bash
+GRADLE_OPTS='-Dorg.gradle.daemon=false' python3 $SKILL_MANAGER_HOME/skills/test-graph/scripts/run.py <graph>
+```
+
 ## Clean
 
 ```bash

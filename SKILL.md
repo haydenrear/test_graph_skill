@@ -37,6 +37,10 @@ Use the skill scripts first. They auto-detect the active scaffolded `<repo>/test
 
 Raw Gradle tasks exist, but treat them as lower-level equivalents. Prefer the scripts above in docs, CI, and agent instructions because they handle root detection and keep the common workflows discoverable.
 
+## Python and uv Environment Debugging
+
+If a graph fails in an agent command but passes when re-run manually, or if Python, uv, `PATH`, virtualenv activation, or Gradle daemon state looks inconsistent, read [`references/debug-python-uv-env.md`](references/debug-python-uv-env.md). The first thing to try for wrapper scripts is often running the exact command with `python3`, because `python` may only be an interactive shell alias.
+
 ## Progressive Disclosure
 
 Open only the reference you need:
@@ -44,6 +48,7 @@ Open only the reference you need:
 - [`references/workflows.md`](references/workflows.md): normal operating guide - mental model, root detection, scaffolding, `discover.py`, `run.py --all`, node creation, graph composition, reports, symlink behavior, imports from user code, and authoring checklist.
 - [`references/reference.md`](references/reference.md): dense API/DSL/task reference - `NodeSpec`, `NodeResult`, context wire format, Gradle DSL, task names, toolchain properties, Java SDK, Python SDK.
 - [`references/github-actions.md`](references/github-actions.md): generated GitHub Actions workflow, skill install, symlink repair/preserve modes, private installs, and options.
+- [`references/debug-python-uv-env.md`](references/debug-python-uv-env.md): troubleshooting Python/uv/Gradle environment mismatches, including `python` alias vs `python3`, uv node execution, and daemon-related "fails then passes" behavior.
 - [`references/tickets/`](references/tickets/): lightweight future-work notes.
 
 If the user asks to run or debug a graph, start with `discover.py` before `run.py`. If they ask for all validation, use `run.py --all`. If they ask for CI, read `references/github-actions.md`.
