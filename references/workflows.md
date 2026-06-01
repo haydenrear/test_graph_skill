@@ -205,6 +205,60 @@ Gradle daemon while debugging:
 GRADLE_OPTS='-Dorg.gradle.daemon=false' python3 $SKILL_MANAGER_HOME/skills/test-graph/scripts/run.py <graph>
 ```
 
+### Rerun only the failing node while debugging
+
+Do not automatically rerun the whole graph after every small fix. If a late node
+fails and its upstream dependencies already produced valid context, iterate on
+that node directly. This is often much faster than repeatedly replaying the full
+graph to reach the same failure point.
+
+Use the failed run's report directory:
+
+```text
+<test_graph>/build/validation-reports/<runId>/
+  envelope/<node-id>.json
+  node-logs/
+  context/step-NNN.json
+```
+
+Inspect `report.md`, `summary.json`, the failed node envelope, and its logs.
+Then rerun the node script directly with the standard node args. For Python:
+
+```bash
+uv run sources/my_node.py \
+  --nodeId=<node-id> \
+  --runId=<runId> \
+  --reportDir=<test_graph>/build/validation-reports/<runId> \
+  --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
+  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+```
+
+For Java/JBang:
+
+```bash
+jbang sources/MyNode.java \
+  --nodeId=<node-id> \
+  --runId=<runId> \
+  --reportDir=<test_graph>/build/validation-reports/<runId> \
+  --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
+  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+```
+
+If no spilled context file exists, pass inline context with
+`--context='{"items":[...]}'`, using upstream envelopes' `published` blocks. Omit
+`--context` only for root nodes with no dependencies.
+
+After the targeted node passes, run the containing graph once from the beginning:
+
+```bash
+<skill>/scripts/run.py <graph>
+```
+
+Rerun from the beginning immediately if the fix changes upstream dependency
+behavior, shared fixture/testbed state, graph composition, node ids, context keys
+used by other nodes, or anything else that makes the previous run's context
+stale.
+
 ## Clean
 
 ```bash

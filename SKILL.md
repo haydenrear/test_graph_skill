@@ -53,6 +53,39 @@ Open only the reference you need:
 
 If the user asks to run or debug a graph, start with `discover.py` before `run.py`. If they ask for all validation, use `run.py --all`. If they ask for CI, read `references/github-actions.md`.
 
+## Smart Failure Loop
+
+Do not blindly rerun a whole graph after every small fix. Test graph nodes are independently runnable scripts, and repeated full-graph runs can waste hours when the same late node fails for different reasons.
+
+When a graph fails:
+
+- Inspect the failed node's report first: `<test_graph>/build/validation-reports/<runId>/report.md`, `summary.json`, `envelope/<node-id>.json`, and any `node-logs/` entries.
+- Decide whether the failure is isolated to the failed node or invalidates upstream setup. If upstream dependencies still produced valid published context, prefer rerunning only the failed node while iterating.
+- Reuse the failed run's context for that node. Pass the same upstream `Context[]` via `--context=@<path>` when a spilled context file exists under `context/`, or pass inline `--context='{"items":[...]}'` built from upstream envelopes' `published` blocks.
+- Invoke the node script directly with the standard node args, writing to a scratch result path inside the same report directory:
+
+```bash
+uv run sources/my_node.py \
+  --nodeId=<node-id> \
+  --runId=<runId> \
+  --reportDir=<test_graph>/build/validation-reports/<runId> \
+  --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
+  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+
+jbang sources/MyNode.java \
+  --nodeId=<node-id> \
+  --runId=<runId> \
+  --reportDir=<test_graph>/build/validation-reports/<runId> \
+  --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
+  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+```
+
+- Omit `--context` only for root nodes with no dependencies.
+- Keep iterating on the failing node with direct node reruns until it passes or until you discover an upstream dependency must change.
+- After the targeted node passes, rerun the containing graph once from the beginning with `<skill>/scripts/run.py <graph>` to validate dependency ordering, fresh context, reporting, and integration behavior.
+
+Rerun from the beginning immediately when the fix changes a dependency node, shared fixture/testbed state, graph composition, node ids, context keys consumed by multiple downstream nodes, or any behavior that makes the previous run's context stale.
+
 ## Core Model
 
 - A node is one validation unit with a stable dotted id, one kind, one runtime, optional dependencies, and a `NodeResult`.
