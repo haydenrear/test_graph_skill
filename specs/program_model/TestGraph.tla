@@ -50,6 +50,34 @@ DslDepsOf(g, n) ==
 
 MergedDeps(g, n) == ScriptDepsOf(n) \cup DslDepsOf(g, n)
 
+DepsForGraph(g) ==
+  [n \in SourceNodes |-> MergedDeps(g, n)]
+
+DepsWithScriptEdge(n, d) ==
+  [m \in SourceNodes |->
+    IF m = n THEN script_deps[m] \cup {d} ELSE script_deps[m]]
+
+DepsForGraphWithDslEdge(g, n, d) ==
+  [m \in SourceNodes |->
+    IF m = n THEN MergedDeps(g, m) \cup {d} ELSE MergedDeps(g, m)]
+
+BoundedPaths ==
+  UNION {[1..len -> SourceNodes] : len \in 2..(Cardinality(SourceNodes) + 1)}
+
+PathUsesDeps(deps, path) ==
+  \A i \in 1..(Len(path) - 1):
+    path[i + 1] \in deps[path[i]]
+
+ReachableByDeps(deps, from, to) ==
+  \E path \in BoundedPaths:
+    /\ path[1] = from
+    /\ path[Len(path)] = to
+    /\ PathUsesDeps(deps, path)
+
+AcyclicDeps(deps) ==
+  \A n \in SourceNodes:
+    ~ReachableByDeps(deps, n, n)
+
 GraphDependencyClosed(g, ns) ==
   /\ ns \subseteq SourceNodes
   /\ explicit_nodes[g] \subseteq ns
@@ -128,6 +156,7 @@ AddScriptDependency(n, d) ==
   /\ d \in SourceNodes
   /\ n /= d
   /\ n \notin described_nodes
+  /\ AcyclicDeps(DepsWithScriptEdge(n, d))
   /\ script_deps' = [script_deps EXCEPT ![n] = @ \cup {d}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
@@ -158,6 +187,7 @@ ApplyDslOverlay(g, n, d) ==
   /\ n \in explicit_nodes[g]
   /\ d \in SourceNodes
   /\ n /= d
+  /\ AcyclicDeps(DepsForGraphWithDslEdge(g, n, d))
   /\ dsl_deps' = [dsl_deps EXCEPT ![g][n] = @ \cup {d}]
   /\ overlays' = [overlays EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
@@ -194,6 +224,7 @@ PlanGraph(g) ==
   /\ g \notin planned_graphs
   /\ explicit_nodes[g] /= {}
   /\ GraphDependencyClosed(g, resolved_nodes[g])
+  /\ AcyclicDeps(DepsForGraph(g))
   /\ \A n \in resolved_nodes[g]: n \in described_nodes
   /\ planned_graphs' = planned_graphs \cup {g}
   /\ plan_docs' = plan_docs \cup {g}
@@ -379,6 +410,11 @@ DslOverlaysOnlyAddDependencies ==
 PlannedGraphsAreDependencyClosed ==
   \A g \in planned_graphs:
     GraphDependencyClosed(g, resolved_nodes[g])
+
+\* @invariant PlannedGraphsAreAcyclic
+PlannedGraphsAreAcyclic ==
+  \A g \in planned_graphs:
+    AcyclicDeps(DepsForGraph(g))
 
 \* @invariant RunsRespectDependencies
 RunsRespectDependencies ==

@@ -261,6 +261,7 @@ invariants:
   - DependencyConstantsAreIndexed
   - DslOverlaysOnlyAddDependencies
   - PlannedGraphsAreDependencyClosed
+  - PlannedGraphsAreAcyclic
   - RunsRespectDependencies
   - ContextContainsOnlyPassedPublishedData
   - EveryAttemptGetsOneEnvelope
@@ -407,9 +408,9 @@ validation:
     command: cd specs/program_model && tlc2 -config MC.cfg TestGraph.tla
     status: passed
     last_run: 2026-06-05
-    states_generated: 4319590
-    distinct_states: 254356
-    depth: 26
+    states_generated: 835069
+    distinct_states: 70558
+    depth: 24
   scaffold_tests:
     command: pytest specs/program_model/tests
     status: passed
