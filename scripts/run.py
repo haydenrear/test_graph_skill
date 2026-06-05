@@ -17,9 +17,24 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
 import sys
 
 from _common import add_test_graph_root_arg, run_gradle
+
+
+def _gradle_opts_with_daemon_disabled() -> str:
+    """Return GRADLE_OPTS including the daemon-disable flag, preserving existing flags."""
+    desired_flag = "-Dorg.gradle.daemon=false"
+    existing = os.environ.get("GRADLE_OPTS", "")
+    if not existing:
+        return desired_flag
+
+    tokens = shlex.split(existing)
+    if desired_flag not in tokens:
+        return f"{existing} {desired_flag}"
+    return existing
 
 
 def main() -> int:
@@ -44,6 +59,8 @@ def main() -> int:
         parser.error("cannot pass both <graph> and --all — pick one")
     if not args.run_all and not args.graph:
         parser.error("either <graph> or --all is required")
+
+    os.environ["GRADLE_OPTS"] = _gradle_opts_with_daemon_disabled()
 
     if args.run_all:
         # Each RunTestGraphTask now writes its own summary.json +
