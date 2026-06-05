@@ -16,12 +16,16 @@ PATH — renders ``<project>/docs/<graph>.png``.
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
 
-from _common import add_test_graph_root_arg, run_gradle, target_project_root
+from _common import (
+    add_test_graph_root_arg,
+    gradle_env_with_daemon_disabled,
+    run_gradle,
+    target_project_root,
+)
 
 
 def _gradlew_cmd(root_override: str | None) -> tuple[list[str], "Path"]:
@@ -36,7 +40,7 @@ def _capture_gradle(args: list[str], root_override: str | None) -> subprocess.Co
     return subprocess.run(
         cmd + args,
         cwd=root,
-        env=os.environ.copy(),
+        env=gradle_env_with_daemon_disabled(),
         capture_output=True,
         text=True,
     )

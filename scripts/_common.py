@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -198,6 +199,19 @@ def run_gradle(args: list[str], test_graph_root: str | Path | None = None) -> in
     root = target_project_root(test_graph_root)
     gradlew = root / "gradlew"
     cmd = [str(gradlew)] + args if gradlew.exists() else ["gradle"] + args
-    env = os.environ.copy()
+    env = gradle_env_with_daemon_disabled()
     proc = subprocess.run(cmd, cwd=root, env=env)
     return proc.returncode
+
+
+def gradle_env_with_daemon_disabled(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return an env dict with ``GRADLE_OPTS`` containing ``-Dorg.gradle.daemon=false``."""
+    merged = os.environ.copy() if env is None else dict(env)
+    gradle_opts = merged.get("GRADLE_OPTS", "")
+    if gradle_opts:
+        tokens = shlex.split(gradle_opts)
+        if "-Dorg.gradle.daemon=false" not in tokens:
+            merged["GRADLE_OPTS"] = f"{gradle_opts} -Dorg.gradle.daemon=false"
+    else:
+        merged["GRADLE_OPTS"] = "-Dorg.gradle.daemon=false"
+    return merged
