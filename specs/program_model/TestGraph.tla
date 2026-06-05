@@ -10,24 +10,16 @@ CONSTANTS
   Graphs,
   Nodes,
   Packages,
-  Smoke,
-  AppRunning,
-  UserSeeded,
-  NetworkPingable,
-  LoginSmoke,
   SourceNodes,
-  ExplicitNodesForSmoke,
-  UserSeededScriptDeps,
-  LoginSmokeScriptDeps,
-  NetworkPingableDslDeps,
-  LoginSmokeDslDeps,
   NoReason
 
 VARIABLES
   scaffolded,
   declared_graphs,
   explicit_nodes,
+  script_deps,
   described_nodes,
+  dsl_deps,
   overlays,
   resolved_nodes,
   planned_graphs,
@@ -42,25 +34,19 @@ VARIABLES
   result
 
 vars ==
-  << scaffolded, declared_graphs, explicit_nodes, described_nodes, overlays,
-     resolved_nodes, planned_graphs, plan_docs, active_graphs, passed_nodes,
-     terminal_nodes, envelopes, context_items, run_reports, package_catalog,
-     result >>
+  << scaffolded, declared_graphs, explicit_nodes, script_deps, described_nodes,
+     dsl_deps, overlays, resolved_nodes, planned_graphs, plan_docs,
+     active_graphs, passed_nodes, terminal_nodes, envelopes, context_items,
+     run_reports, package_catalog, result >>
 
 AvailableFor(g) ==
-  IF g = Smoke THEN ExplicitNodesForSmoke ELSE {}
+  SourceNodes
 
 ScriptDepsOf(n) ==
-  CASE n = UserSeeded -> UserSeededScriptDeps
-    [] n = LoginSmoke -> LoginSmokeScriptDeps
-    [] OTHER -> {}
+  script_deps[n]
 
 DslDepsOf(g, n) ==
-  CASE /\ g = Smoke
-       /\ n = NetworkPingable -> NetworkPingableDslDeps
-    [] /\ g = Smoke
-       /\ n = LoginSmoke -> LoginSmokeDslDeps
-    [] OTHER -> {}
+  dsl_deps[g][n]
 
 MergedDeps(g, n) == ScriptDepsOf(n) \cup DslDepsOf(g, n)
 
@@ -74,7 +60,9 @@ Init ==
   /\ scaffolded = FALSE
   /\ declared_graphs = {}
   /\ explicit_nodes = [g \in Graphs |-> {}]
+  /\ script_deps = [n \in SourceNodes |-> {}]
   /\ described_nodes = {}
+  /\ dsl_deps = [g \in Graphs |-> [n \in SourceNodes |-> {}]]
   /\ overlays = [g \in Graphs |-> {}]
   /\ resolved_nodes = [g \in Graphs |-> {}]
   /\ planned_graphs = {}
@@ -96,10 +84,10 @@ ScaffoldProject ==
   /\ scaffolded' = TRUE
   /\ package_catalog' = Packages
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << declared_graphs, explicit_nodes, described_nodes, overlays,
-                  resolved_nodes, planned_graphs, plan_docs, active_graphs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  run_reports >>
+  /\ UNCHANGED << declared_graphs, explicit_nodes, script_deps, described_nodes,
+                  dsl_deps, overlays, resolved_nodes, planned_graphs,
+                  plan_docs, active_graphs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, run_reports >>
 
 \* @command RegisterGraph
 \* @result WorkflowResult
@@ -110,7 +98,8 @@ RegisterGraph(g) ==
   /\ g \notin declared_graphs
   /\ declared_graphs' = declared_graphs \cup {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, explicit_nodes, described_nodes, overlays,
+  /\ UNCHANGED << scaffolded, explicit_nodes, script_deps, described_nodes,
+                  dsl_deps, overlays,
                   resolved_nodes, planned_graphs, plan_docs, active_graphs,
                   passed_nodes, terminal_nodes, envelopes, context_items,
                   run_reports, package_catalog >>
@@ -125,10 +114,26 @@ AddExplicitNode(g, n) ==
   /\ n \in AvailableFor(g)
   /\ explicit_nodes' = [explicit_nodes EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, described_nodes, overlays,
-                  resolved_nodes, planned_graphs, plan_docs, active_graphs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, script_deps, described_nodes,
+                  dsl_deps, overlays, resolved_nodes, planned_graphs,
+                  plan_docs, active_graphs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, run_reports, package_catalog >>
+
+\* @command AddScriptDependency
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.add_script_dependency
+AddScriptDependency(n, d) ==
+  /\ scaffolded
+  /\ n \in SourceNodes
+  /\ d \in SourceNodes
+  /\ n /= d
+  /\ n \notin described_nodes
+  /\ script_deps' = [script_deps EXCEPT ![n] = @ \cup {d}]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
+                  dsl_deps, overlays, resolved_nodes, planned_graphs,
+                  plan_docs, active_graphs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, run_reports, package_catalog >>
 
 \* @command DescribeNode
 \* @result WorkflowResult
@@ -138,26 +143,28 @@ DescribeNode(n) ==
   /\ n \in SourceNodes
   /\ described_nodes' = described_nodes \cup {n}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, overlays,
-                  resolved_nodes, planned_graphs, plan_docs, active_graphs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  dsl_deps, overlays, resolved_nodes, planned_graphs,
+                  plan_docs, active_graphs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, run_reports, package_catalog >>
 
 \* @command ApplyDslOverlay
 \* @result WorkflowResult
 \* @port TestGraphProgramPort.apply_dsl_overlay
-ApplyDslOverlay(g, n) ==
+ApplyDslOverlay(g, n, d) ==
   /\ scaffolded
   /\ g \in declared_graphs
   /\ g \notin planned_graphs
   /\ n \in explicit_nodes[g]
-  /\ DslDepsOf(g, n) /= {}
+  /\ d \in SourceNodes
+  /\ n /= d
+  /\ dsl_deps' = [dsl_deps EXCEPT ![g][n] = @ \cup {d}]
   /\ overlays' = [overlays EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  resolved_nodes, planned_graphs, plan_docs, active_graphs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, resolved_nodes, planned_graphs, plan_docs,
+                  active_graphs, passed_nodes, terminal_nodes, envelopes,
+                  context_items, run_reports, package_catalog >>
 
 \* @command ResolveNode
 \* @result WorkflowResult
@@ -173,10 +180,10 @@ ResolveNode(g, n) ==
            n \in MergedDeps(g, m))
   /\ resolved_nodes' = [resolved_nodes EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, planned_graphs, plan_docs, active_graphs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, planned_graphs,
+                  plan_docs, active_graphs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, run_reports, package_catalog >>
 
 \* @command PlanGraph
 \* @result WorkflowResult
@@ -191,10 +198,10 @@ PlanGraph(g) ==
   /\ planned_graphs' = planned_graphs \cup {g}
   /\ plan_docs' = plan_docs \cup {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, active_graphs, passed_nodes,
-                  terminal_nodes, envelopes, context_items, run_reports,
-                  package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  active_graphs, passed_nodes, terminal_nodes, envelopes,
+                  context_items, run_reports, package_catalog >>
 
 \* @command StartRun
 \* @result WorkflowResult
@@ -210,9 +217,9 @@ StartRun(g) ==
   /\ context_items' = [context_items EXCEPT ![g] = {}]
   /\ run_reports' = run_reports \ {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, package_catalog >>
 
 \* @command RunNodePass
 \* @result NodeRunResult
@@ -227,9 +234,10 @@ RunNodePass(g, n) ==
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
   /\ context_items' = [context_items EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  active_graphs, terminal_nodes, run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, active_graphs, terminal_nodes,
+                  run_reports, package_catalog >>
 
 \* @command RunNodeTerminal
 \* @result NodeRunResult
@@ -244,9 +252,10 @@ RunNodeTerminal(g, n) ==
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
   /\ active_graphs' = active_graphs \ {g}
   /\ result' = [accepted |-> FALSE, reason |-> "NODE_NOT_PASSED"]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  passed_nodes, context_items, run_reports, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, passed_nodes, context_items,
+                  run_reports, package_catalog >>
 
 \* @command WriteInlineReport
 \* @result WorkflowResult
@@ -259,10 +268,10 @@ WriteInlineReport(g) ==
   /\ run_reports' = run_reports \cup {g}
   /\ active_graphs' = active_graphs \ {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  passed_nodes, terminal_nodes, envelopes, context_items,
-                  package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, package_catalog >>
 
 \* @command RebuildReport
 \* @result WorkflowResult
@@ -273,10 +282,10 @@ RebuildReport(g) ==
   /\ envelopes[g] /= {}
   /\ run_reports' = run_reports \cup {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  active_graphs, passed_nodes, terminal_nodes, envelopes,
-                  context_items, package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, active_graphs, passed_nodes,
+                  terminal_nodes, envelopes, context_items, package_catalog >>
 
 \* @command CleanBuild
 \* @result WorkflowResult
@@ -290,9 +299,9 @@ CleanBuild ==
   /\ context_items' = [g \in Graphs |-> {}]
   /\ run_reports' = {}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, described_nodes,
-                  overlays, resolved_nodes, planned_graphs, plan_docs,
-                  package_catalog >>
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, package_catalog >>
 
 NoOp ==
   UNCHANGED vars
@@ -303,10 +312,12 @@ Next ==
       RegisterGraph(g)
   \/ \E g \in Graphs, n \in Nodes:
       AddExplicitNode(g, n)
+  \/ \E n \in Nodes, d \in Nodes:
+      AddScriptDependency(n, d)
   \/ \E n \in Nodes:
       DescribeNode(n)
-  \/ \E g \in Graphs, n \in Nodes:
-      ApplyDslOverlay(g, n)
+  \/ \E g \in Graphs, n \in Nodes, d \in Nodes:
+      ApplyDslOverlay(g, n, d)
   \/ \E g \in Graphs, n \in Nodes:
       ResolveNode(g, n)
   \/ \E g \in Graphs:
@@ -329,7 +340,9 @@ TypeInvariant ==
   /\ scaffolded \in BOOLEAN
   /\ declared_graphs \subseteq Graphs
   /\ explicit_nodes \in [Graphs -> SUBSET SourceNodes]
+  /\ script_deps \in [SourceNodes -> SUBSET SourceNodes]
   /\ described_nodes \subseteq SourceNodes
+  /\ dsl_deps \in [Graphs -> [SourceNodes -> SUBSET SourceNodes]]
   /\ overlays \in [Graphs -> SUBSET SourceNodes]
   /\ resolved_nodes \in [Graphs -> SUBSET SourceNodes]
   /\ planned_graphs \subseteq declared_graphs
@@ -354,13 +367,8 @@ ScriptSpecsAreSourceOfTruth ==
 
 \* @invariant DependencyConstantsAreIndexed
 DependencyConstantsAreIndexed ==
-  /\ Smoke \in Graphs
-  /\ {AppRunning, UserSeeded, NetworkPingable, LoginSmoke} = SourceNodes
-  /\ ExplicitNodesForSmoke \subseteq SourceNodes
-  /\ UserSeededScriptDeps \subseteq SourceNodes
-  /\ LoginSmokeScriptDeps \subseteq SourceNodes
-  /\ NetworkPingableDslDeps \subseteq SourceNodes
-  /\ LoginSmokeDslDeps \subseteq SourceNodes
+  /\ SourceNodes \subseteq Nodes
+  /\ SourceNodes /= {}
 
 \* @invariant DslOverlaysOnlyAddDependencies
 DslOverlaysOnlyAddDependencies ==

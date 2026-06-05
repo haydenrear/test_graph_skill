@@ -27,9 +27,15 @@ state:
       explicit_nodes:
         type: dict[GraphId, frozenset[NodeId]]
         tla: explicit_nodes
+      script_deps:
+        type: dict[NodeId, frozenset[NodeId]]
+        tla: script_deps
       described_nodes:
         type: frozenset[NodeId]
         tla: described_nodes
+      dsl_deps:
+        type: dict[GraphId, dict[NodeId, frozenset[NodeId]]]
+        tla: dsl_deps
       overlays:
         type: dict[GraphId, frozenset[NodeId]]
         tla: overlays
@@ -94,6 +100,15 @@ commands:
       node_id:
         type: NodeId
         tla: n
+  AddScriptDependency:
+    action: AddScriptDependency
+    fields:
+      node_id:
+        type: NodeId
+        tla: n
+      dependency_node_id:
+        type: NodeId
+        tla: d
   DescribeNode:
     action: DescribeNode
     fields:
@@ -109,6 +124,9 @@ commands:
       node_id:
         type: NodeId
         tla: n
+      dependency_node_id:
+        type: NodeId
+        tla: d
   ResolveNode:
     action: ResolveNode
     fields:
@@ -200,6 +218,9 @@ ports:
       add_explicit_node:
         command: AddExplicitNode
         result: WorkflowResult
+      add_script_dependency:
+        command: AddScriptDependency
+        result: WorkflowResult
       describe_node:
         command: DescribeNode
         result: WorkflowResult
@@ -249,13 +270,12 @@ invariants:
 finite_model:
   Graphs:
     values:
-      - Smoke
+      - GraphA
   Nodes:
     values:
-      - AppRunning
-      - UserSeeded
-      - NetworkPingable
-      - LoginSmoke
+      - NodeA
+      - NodeB
+      - NodeC
   Packages:
     values:
       - SkillEntrypoint
@@ -269,28 +289,11 @@ finite_model:
       - SkillManifest
   SourceNodes:
     values:
-      - AppRunning
-      - UserSeeded
-      - NetworkPingable
-      - LoginSmoke
-  ExplicitNodesForSmoke:
-    values:
-      - UserSeeded
-      - NetworkPingable
-      - LoginSmoke
-  UserSeededScriptDeps:
-    values:
-      - AppRunning
-  LoginSmokeScriptDeps:
-    values:
-      - AppRunning
-      - UserSeeded
-  NetworkPingableDslDeps:
-    values:
-      - AppRunning
-  LoginSmokeDslDeps:
-    values:
-      - NetworkPingable
+      - NodeA
+      - NodeB
+      - NodeC
+  dependency_shape:
+    values: explored_by_AddScriptDependency_and_ApplyDslOverlay
 
 program_context:
   summary: >
@@ -404,9 +407,9 @@ validation:
     command: cd specs/program_model && tlc2 -config MC.cfg TestGraph.tla
     status: passed
     last_run: 2026-06-05
-    states_generated: 23435
-    distinct_states: 1941
-    depth: 23
+    states_generated: 4319590
+    distinct_states: 254356
+    depth: 26
   scaffold_tests:
     command: pytest specs/program_model/tests
     status: passed

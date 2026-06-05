@@ -26,7 +26,7 @@ def test_program_model_points_at_existing_package_surfaces() -> None:
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
         "project_sdk_sources/sdk/java/src/main/java/com/hayden/testgraphsdk/sdk/NodeSpec.java",
         "project_sdk_sources/sdk/python/src/testgraphsdk/node_spec.py",
-        "project_sdk_sources/sources/LoginSmoke.java",
+        "project_sdk_sources/sources",
         "skill-manager.toml",
     ]
     missing = [path for path in expected if not (REPO_ROOT / path).exists()]
