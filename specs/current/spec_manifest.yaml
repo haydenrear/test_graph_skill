@@ -1,0 +1,100 @@
+module: TestGraph
+package: current_program_cases
+
+status:
+  workflow: ticket
+  active_ticket: TG-3
+  active_ticket_title: "Resumption from any Build in Build Directory"
+  relation_to_program_model: equivalent_to_accepted_baseline_at_workflow_start
+  relation_to_desired_program_model: source_state_before_resumption_work_lands
+  current_model_rule: whole_program_working_copy_not_ticket_projection
+  test_modeling_rule: do_not_model_tests_or_validation_harnesses_as_program_behavior
+  updated: 2026-06-10
+  current_slice:
+    name: accepted_baseline
+    status: open
+    refines:
+      - ../program_model/TestGraph.tla
+    implemented_actions:
+      - ScaffoldProject
+      - RegisterGraph
+      - AddExplicitNode
+      - AddScriptDependency
+      - DescribeNode
+      - ApplyDslOverlay
+      - ResolveNode
+      - PlanGraph
+      - StartRun
+      - RunNodePass
+      - RunNodeTerminal
+      - WriteInlineReport
+      - RebuildReport
+      - CleanBuild
+    validation:
+      unit:
+        - pytest specs/current/tests
+      tlc:
+        - cd specs/current && tlc2 -config MC.cfg TestGraph.tla
+      graph:
+        - python scripts/run.py smoke --test-graph-root project_sdk_sources
+      evidence:
+        - command: pytest specs/current/tests specs/desired_program_model/tests
+          status: passed
+          last_run: 2026-06-10
+          tests: 3
+        - command: cd specs/current && tlc2 -config MC.cfg TestGraph.tla
+          status: passed
+          last_run: 2026-06-10
+          states_generated: 4194481
+          distinct_states: 234547
+          depth: 24
+  comparison_to_issue_3:
+    already_present:
+      - Node SDKs accept inline context and file references through --context.
+      - PlanExecutor can spill large cumulative Context[] payloads under build/validation-reports/<runId>/context.
+      - Documentation explains a manual direct-node rerun when a spilled context file exists.
+      - Every attempted node gets a canonical envelope under envelope/<node-id>.json.
+    gaps:
+      - Input context is not written for every node; small context currently remains inline only.
+      - There is no first-class resume argument on the graph run surface.
+      - There is no first-class run-only-this-node surface backed by a build directory.
+      - Failed-node rerun guidance is not emitted from the executor/report path.
+      - NodeSpec has timeout retry metadata, but not the requested rerun(true|false) metadata.
+      - Current adapters are documented boundaries, not executable refinement adapters.
+  next:
+    - Implement TG-3 slices and advance specs/current after each landed slice.
+    - Keep the current model whole-program and preserve accepted baseline behavior.
+    - Run TLC and current-model tests before graph-level evidence is marked complete.
+
+source_model:
+  program_model_manifest: ../program_model/spec_manifest.yaml
+  program_model_module: ../program_model/TestGraph.tla
+  desired_ticket_plan: ../desired_program_model/ticket_plan.yaml
+
+case_codegen:
+  style: explicit_transition_cases
+  generation_status: planned
+
+state_fields:
+  baseline: inherited_from_program_model
+  not_yet_implemented:
+    - input_contexts
+    - rerunnable_nodes
+    - rerun_guidance
+    - resumed_nodes
+    - single_node_reruns
+
+actions:
+  baseline: inherited_from_program_model
+  not_yet_implemented:
+    - SetNodeRerunDisabled
+    - ResumeRunFromBuild
+    - RunOnlyNodeFromBuild
+
+ports:
+  TestGraphProgramPort:
+    status: inherited_baseline_until_TG-3_lands
+
+adapters: case_adapters.toml
+notes:
+  package_from_program_model: testgraph_program_cases
