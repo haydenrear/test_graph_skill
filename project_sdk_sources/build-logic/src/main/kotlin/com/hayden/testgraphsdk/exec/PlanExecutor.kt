@@ -33,9 +33,19 @@ class PlanExecutor(
     private val runId: String,
     private val logger: Logger,
 ) {
-    fun run(plan: List<ValidationNodeSpec>) {
-        val cumulative = mutableListOf<ContextItem>()
+    data class ResumeFromBuild(
+        val buildDir: File,
+        val nodeId: String,
+    )
+
+    fun run(
+        plan: List<ValidationNodeSpec>,
+        resumeFromBuild: ResumeFromBuild? = null,
+    ) {
         val reportRoot = reportDir.asFile
+        val resumeState = prepareResume(plan, resumeFromBuild)
+        val cumulative = resumeState.initialContext.toMutableList()
+        val executionPlan = resumeState.executionPlan
 
         // .tmp-results/ holds the SDK's raw NodeResult JSON before we
         // post-process it. node-logs/ holds the merged stdout+stderr
@@ -44,12 +54,16 @@ class PlanExecutor(
         val nodeLogsDir = File(reportRoot, "node-logs").apply { mkdirs() }
         val envelopeDir = File(reportRoot, "envelope").apply { mkdirs() }
 
-        for ((i, spec) in plan.withIndex()) {
-            logger.lifecycle("  [${i + 1}/${plan.size}] ${spec.id} (${spec.runtime.name})")
+        for ((i, spec) in executionPlan.withIndex()) {
+            logger.lifecycle("  [${i + 1}/${executionPlan.size}] ${spec.id} (${spec.runtime.name})")
 
             val inputContextFile = writeInputContextSnapshot(cumulative, reportRoot, spec.id)
             val contextArg = if (cumulative.isEmpty()) null
-                             else encodeContextArg(cumulative, reportRoot, i)
+                             else if (resumeState.useSnapshotForFirstNode && i == 0) {
+                                 "@" + inputContextFile.absolutePath
+                             } else {
+                                 encodeContextArg(cumulative, reportRoot, i)
+                             }
 
             val resultOut = File(tmpResultsDir, "${spec.id}.json")
             val stdoutLog = File(nodeLogsDir, "${spec.id}.stdout.log")
@@ -120,6 +134,51 @@ class PlanExecutor(
                 )
             }
         }
+    }
+
+    private data class ResumeState(
+        val executionPlan: List<ValidationNodeSpec>,
+        val initialContext: List<ContextItem>,
+        val useSnapshotForFirstNode: Boolean,
+    )
+
+    private fun prepareResume(
+        plan: List<ValidationNodeSpec>,
+        resumeFromBuild: ResumeFromBuild?,
+    ): ResumeState {
+        if (resumeFromBuild == null) {
+            return ResumeState(plan, emptyList(), false)
+        }
+
+        val resumeIndex = plan.indexOfFirst { it.id == resumeFromBuild.nodeId }
+        if (resumeIndex < 0) {
+            throw IllegalArgumentException(
+                "cannot resume from node '${resumeFromBuild.nodeId}': node is not in this graph plan"
+            )
+        }
+
+        val resumeSpec = plan[resumeIndex]
+        if (!resumeSpec.rerun) {
+            throw IllegalArgumentException(
+                "cannot resume from node '${resumeSpec.id}': node metadata has rerun=false"
+            )
+        }
+
+        val initialContext = readInputContextSnapshot(resumeFromBuild.buildDir, resumeSpec.id)
+        val availableContext = initialContext.map { it.nodeId }.toSet()
+        val missingDeps = resumeSpec.dependsOn.toSet() - availableContext
+        if (missingDeps.isNotEmpty()) {
+            throw IllegalArgumentException(
+                "cannot resume from node '${resumeSpec.id}': saved input context is missing " +
+                        "dependencies ${missingDeps.sorted().joinToString(", ")}"
+            )
+        }
+
+        logger.lifecycle(
+            "resuming '${resumeSpec.id}' from ${resumeFromBuild.buildDir.absolutePath}; " +
+                    "skipping ${resumeIndex} already-passed dependency step(s)"
+        )
+        return ResumeState(plan.drop(resumeIndex), initialContext, true)
     }
 
     private fun readContextItem(nodeId: String): ContextItem {

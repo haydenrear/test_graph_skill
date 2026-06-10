@@ -1,5 +1,6 @@
 package com.hayden.testgraphsdk.exec
 
+import com.hayden.testgraphsdk.MiniJson
 import java.io.File
 import java.util.regex.Pattern
 
@@ -34,6 +35,20 @@ object ContextSerde {
         }
         sb.append("]}")
         return sb.toString()
+    }
+
+    /**
+     * Parse the Context[] wire format emitted by [toJson]. This is used by
+     * build-directory resume so the executor can seed a run from the exact
+     * input context snapshot captured before the selected node's prior attempt.
+     */
+    fun fromJson(json: String): List<ContextItem> {
+        val root = MiniJson.obj(MiniJson.parse(json))
+        return MiniJson.list(root["items"]).mapNotNull { raw ->
+            val obj = raw as? Map<*, *> ?: return@mapNotNull null
+            val nodeId = obj["nodeId"] as? String ?: return@mapNotNull null
+            ContextItem(nodeId, MiniJson.stringMap(obj["data"]))
+        }
     }
 
     /**
@@ -111,11 +126,31 @@ internal fun writeInputContextSnapshot(
     reportRoot: File,
     nodeId: String,
 ): File {
-    val dir = File(reportRoot, "context").apply { mkdirs() }
-    val file = File(dir, "${safeContextFileStem(nodeId)}.input.json")
+    val file = inputContextSnapshotFile(reportRoot, nodeId)
+    file.parentFile.mkdirs()
     file.writeText(ContextSerde.toJson(items))
     return file
 }
+
+/**
+ * Load the saved Context[] input for [nodeId] from a previous build/report
+ * directory. This is the canonical resume source.
+ */
+internal fun readInputContextSnapshot(
+    reportRoot: File,
+    nodeId: String,
+): List<ContextItem> {
+    val file = inputContextSnapshotFile(reportRoot, nodeId)
+    if (!file.isFile) {
+        throw IllegalArgumentException(
+            "saved input context for node '$nodeId' was not found at ${file.absolutePath}"
+        )
+    }
+    return ContextSerde.fromJson(file.readText())
+}
+
+internal fun inputContextSnapshotFile(reportRoot: File, nodeId: String): File =
+    File(File(reportRoot, "context"), "${safeContextFileStem(nodeId)}.input.json")
 
 /**
  * Writes the Context[] inline or to disk depending on size, and returns

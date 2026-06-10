@@ -207,6 +207,23 @@ Gradle daemon while debugging:
 GRADLE_OPTS='-Dorg.gradle.daemon=false' python3 $SKILL_MANAGER_HOME/skills/test-graph/scripts/run.py <graph>
 ```
 
+### Resume a graph from a saved build
+
+When a previous run already reached the node you need to retry, resume the graph
+from that node instead of replaying earlier dependency steps. The selected node
+uses its saved input context from the build directory:
+
+```bash
+<skill>/scripts/run.py <graph> \
+  --resume-from-build <test_graph>/build/validation-reports/<runId> \
+  --resume-from-node <node-id>
+```
+
+The node must have `rerun=true` in its script metadata, and its saved
+`context/<node-id>.input.json` must include every declared dependency. The
+executor skips earlier plan steps, runs the selected node, continues through the
+remaining graph plan, and rewrites the report in the same build directory.
+
 ### Rerun only the failing node while debugging
 
 Do not automatically rerun the whole graph after every small fix. If a late node

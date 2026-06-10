@@ -13,6 +13,7 @@ from inside this `test_graph/` directory:
 <skill>/scripts/discover.py smoke           # dry-run plan + render docs/smoke.png
 <skill>/scripts/run.py smoke                # run one graph
 <skill>/scripts/run.py --all                # run every registered graph serially
+<skill>/scripts/run.py smoke --resume-from-build build/validation-reports/<runId> --resume-from-node login.smoke
 <skill>/scripts/clean.py                    # remove build/ outputs
 ```
 
@@ -68,7 +69,8 @@ Each run writes under `build/validation-reports/<runId>/`:
 
 ```
 build/validation-reports/<runId>/
-  envelope/<nodeId>.json    per-node envelope
-  summary.json              unified summary (written inline at end of run)
-  report.md                 markdown rollup (same)
+  envelope/<nodeId>.json      per-node envelope
+  context/<nodeId>.input.json exact input Context[] for that node attempt
+  summary.json                unified summary (written inline at end of run)
+  report.md                   markdown rollup (same)
 ```

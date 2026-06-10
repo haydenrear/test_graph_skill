@@ -61,7 +61,8 @@ When a graph fails:
 
 - Inspect the failed node's report first: `<test_graph>/build/validation-reports/<runId>/report.md`, `summary.json`, `envelope/<node-id>.json`, and any `node-logs/` entries.
 - Decide whether the failure is isolated to the failed node or invalidates upstream setup. If upstream dependencies still produced valid published context, prefer rerunning only the failed node while iterating.
-- Reuse the failed run's context for that node. Each attempted node writes its exact input `Context[]` under `context/<node-id>.input.json`; pass it back as `--context=@<path>`.
+- To resume graph execution from that node and continue downstream, use `<skill>/scripts/run.py <graph> --resume-from-build <test_graph>/build/validation-reports/<runId> --resume-from-node <node-id>`. The selected node must have `rerun=true`.
+- To invoke the node script directly, reuse the failed run's context for that node. Each attempted node writes its exact input `Context[]` under `context/<node-id>.input.json`; pass it back as `--context=@<path>`.
 - Invoke the node script directly with the standard node args, writing to a scratch result path inside the same report directory:
 
 ```bash

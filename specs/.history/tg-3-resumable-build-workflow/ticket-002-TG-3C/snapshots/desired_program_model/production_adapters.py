@@ -1,9 +1,9 @@
-"""Repository-local adapters for TestGraph current-model cases.
+"""Repository-local adapters for TestGraph desired-model cases.
 
-The TG-3 workflow starts equivalent to the accepted program model. These
-adapters stay non-executable until each production slice updates
-``specs/current`` with real setup, invocation, observation, and refinement
-against generated state-graph cases.
+The TG-3 desired model records target semantic boundaries and keeps adapters
+non-executable. As specs/current advances, replace these documented boundaries
+with real setup, invocation, observation, and refinement against generated
+state-graph cases.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ class _DocumentedBoundaryAdapter:
     def can_run(self, case):
         del case
         return False, (
-            f"{self.boundary} is documented in specs/current/spec_manifest.yaml; "
-            "wire an executable refinement adapter when the matching TG-3 slice lands"
+            f"{self.boundary} is documented in specs/desired_program_model/spec_manifest.yaml; "
+            "wire an executable refinement adapter when specs/current implements this boundary"
         )
 
 
@@ -46,13 +46,19 @@ class GraphRunAdapter(_DocumentedBoundaryAdapter):
     )
 
 
+class ReportAdapter(_DocumentedBoundaryAdapter):
+    boundary = "reports"
+    files = (
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunReportWriter.kt",
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/ValidationReportTask.kt",
+    )
+
+
 class InputContextSnapshotAdapter(_DocumentedBoundaryAdapter):
     boundary = "input_context_snapshots"
     files = (
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/Context.kt",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunReportWriter.kt",
-        "project_sdk_sources/sources/ContextSnapshotsPresent.py",
     )
 
 
@@ -63,23 +69,33 @@ class RerunMetadataAdapter(_DocumentedBoundaryAdapter):
         "project_sdk_sources/sdk/python/src/testgraphsdk/node_spec.py",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/ValidationNodeSpec.kt",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/NodeDescribeLoader.kt",
-        "project_sdk_sources/sources/RerunDisabledProbe.py",
     )
 
 
 class ResumeRunFromBuildAdapter(_DocumentedBoundaryAdapter):
-    boundary = "resume_from_build"
+    boundary = "resume_run_from_build"
     files = (
         "scripts/run.py",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunTestGraphTask.kt",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/Context.kt",
     )
 
 
-class ReportAdapter(_DocumentedBoundaryAdapter):
-    boundary = "reports"
+class RunOnlyNodeFromBuildAdapter(_DocumentedBoundaryAdapter):
+    boundary = "run_only_node_from_build"
     files = (
+        "scripts/run.py",
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunTestGraphTask.kt",
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/Executors.kt",
+    )
+
+
+class RerunGuidanceAdapter(_DocumentedBoundaryAdapter):
+    boundary = "rerun_guidance"
+    files = (
+        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunReportWriter.kt",
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/ValidationReportTask.kt",
+        "references/workflows.md",
+        "references/reference.md",
     )

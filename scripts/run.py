@@ -13,11 +13,13 @@ many graphs the invocation spans.
 Usage:
     run.py <graph-name>           # single graph (e.g. run.py smoke)
     run.py --all                  # every registered graph, serial
+    run.py smoke --resume-from-build build/validation-reports/<runId> --resume-from-node login.smoke
 """
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from _common import add_test_graph_root_arg, run_gradle
 
@@ -37,6 +39,17 @@ def main() -> int:
         help="Run every registered test graph sequentially (Gradle "
              "task `validationRunAll`). Mutually exclusive with <graph>.",
     )
+    parser.add_argument(
+        "--resume-from-build",
+        help="Existing build/validation-reports/<runId> directory whose saved "
+             "context/<node-id>.input.json should seed resumed execution. "
+             "Requires <graph> and --resume-from-node.",
+    )
+    parser.add_argument(
+        "--resume-from-node",
+        help="Node id to resume from. The selected node's saved input context "
+             "must exist under --resume-from-build/context/.",
+    )
     add_test_graph_root_arg(parser)
     args = parser.parse_args()
 
@@ -44,6 +57,10 @@ def main() -> int:
         parser.error("cannot pass both <graph> and --all — pick one")
     if not args.run_all and not args.graph:
         parser.error("either <graph> or --all is required")
+    if args.run_all and (args.resume_from_build or args.resume_from_node):
+        parser.error("resume options apply to one graph; pass <graph> instead of --all")
+    if bool(args.resume_from_build) != bool(args.resume_from_node):
+        parser.error("--resume-from-build and --resume-from-node must be provided together")
 
     if args.run_all:
         # Each RunTestGraphTask now writes its own summary.json +
@@ -55,7 +72,14 @@ def main() -> int:
 
     # Single-graph path: same story — the per-graph task emits its own
     # rollup inline, so we don't need a second `validationReport` call.
-    return run_gradle(["--console=plain", args.graph], args.test_graph_root)
+    gradle_args = ["--console=plain", args.graph]
+    if args.resume_from_build:
+        resume_from_build = str(Path(args.resume_from_build).expanduser().resolve())
+        gradle_args += [
+            f"--resume-from-build={resume_from_build}",
+            f"--resume-from-node={args.resume_from_node}",
+        ]
+    return run_gradle(gradle_args, args.test_graph_root)
 
 
 if __name__ == "__main__":

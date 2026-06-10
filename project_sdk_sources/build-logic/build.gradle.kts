@@ -14,6 +14,7 @@ repositories {
 dependencies {
     // Node specs come from invoking scripts with --describe-out, parsed by
     // MiniJson.kt. No YAML, no JSON library — plugin stays dependency-free.
+    testImplementation(kotlin("test"))
 }
 
 gradlePlugin {

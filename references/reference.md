@@ -182,6 +182,27 @@ These are the underlying Gradle tasks.
 
 `run.py --all` wraps `validationRunAll`.
 
+Graph tasks accept resume options for a single graph:
+
+| Option | Purpose |
+| --- | --- |
+| `--resume-from-build=<dir>` | Existing `build/validation-reports/<runId>` directory containing saved input contexts. |
+| `--resume-from-node=<node-id>` | Node id whose `context/<node-id>.input.json` seeds the resumed run. |
+
+Use both options together. The selected node must be in the graph plan, must
+have `rerun=true`, and its saved input context must contain all of its declared
+dependencies. The executor skips earlier plan steps and continues from the
+selected node through the rest of the graph, writing refreshed envelopes and
+report files back into the same build directory.
+
+Wrapper form:
+
+```bash
+<skill>/scripts/run.py smoke \
+  --resume-from-build <test_graph>/build/validation-reports/<runId> \
+  --resume-from-node login.smoke
+```
+
 ## Unified result envelope
 
 What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.json`:

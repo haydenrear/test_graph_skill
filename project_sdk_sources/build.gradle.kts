@@ -61,6 +61,14 @@ validationGraph {
         // sources/AppRunning.java via sourcesDir.
     }
 
+    testGraph("rerunSmokeUv") {
+        node("sources/RerunDisabledProbe.py")
+    }
+
+    testGraph("rerunSmokeJava") {
+        node("sources/RerunJavaProbe.java")
+    }
+
     // Multiple graphs supported — each becomes its own Gradle task.
     // Uncomment to add a second graph that reuses the same scripts with
     // different DSL overlays (tighter timeouts, extra tags, extra edges):
