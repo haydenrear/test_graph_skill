@@ -47,6 +47,7 @@ class PlanExecutor(
         for ((i, spec) in plan.withIndex()) {
             logger.lifecycle("  [${i + 1}/${plan.size}] ${spec.id} (${spec.runtime.name})")
 
+            val inputContextFile = writeInputContextSnapshot(cumulative, reportRoot, spec.id)
             val contextArg = if (cumulative.isEmpty()) null
                              else encodeContextArg(cumulative, reportRoot, i)
 
@@ -101,6 +102,7 @@ class PlanExecutor(
                 executorStartedAt = startedAt,
                 executorEndedAt = endedAt,
                 reportRoot = reportRoot,
+                inputContextFile = inputContextFile,
             )
             envelope.writeText(outcome.envelopeJson)
 
@@ -159,8 +161,10 @@ class PlanExecutor(
         executorStartedAt: Instant,
         executorEndedAt: Instant,
         reportRoot: File,
+        inputContextFile: File,
     ): EnvelopeOutcome {
         val stdoutRel = relativeToReport(reportRoot, stdoutLog)
+        val inputContextRel = relativeToReport(reportRoot, inputContextFile)
 
         if (execOutcome is ExecutionOutcome.TimedOut) {
             val attempts = spec.retries + 1
@@ -169,7 +173,7 @@ class PlanExecutor(
                 spec, "errored",
                 "node timed out after ${spec.timeout}$attemptsClause; " +
                         "executor force-killed the subprocess (see capturedStdoutLog)",
-                stdoutRel, -1, executorStartedAt, executorEndedAt,
+                stdoutRel, inputContextRel, -1, executorStartedAt, executorEndedAt,
             )
         }
         val exitCode = (execOutcome as ExecutionOutcome.Completed).exitCode
@@ -179,7 +183,7 @@ class PlanExecutor(
                 spec, "errored",
                 "node exited $exitCode without writing --result-out " +
                         "(see capturedStdoutLog for stdout/stderr)",
-                stdoutRel, exitCode, executorStartedAt, executorEndedAt,
+                stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
             )
         }
 
@@ -189,7 +193,7 @@ class PlanExecutor(
             return synthesized(
                 spec, "errored",
                 "node wrote malformed --result-out (not a JSON object); see capturedStdoutLog",
-                stdoutRel, exitCode, executorStartedAt, executorEndedAt,
+                stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
                 malformedRaw = raw,
             )
         }
@@ -198,7 +202,7 @@ class PlanExecutor(
             return synthesized(
                 spec, "errored",
                 "node wrote --result-out with invalid status=${status ?: "<missing>"}; see capturedStdoutLog",
-                stdoutRel, exitCode, executorStartedAt, executorEndedAt,
+                stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
                 malformedRaw = raw,
             )
         }
@@ -217,6 +221,7 @@ class PlanExecutor(
             append(",\"executorEndedAt\":").append(jsonString(executorEndedAt.toString()))
             append(",\"spawnExitCode\":").append(exitCode)
             append(",\"capturedStdoutLog\":").append(jsonString(stdoutRel))
+            append(",\"inputContextFile\":").append(jsonString(inputContextRel))
             append("}\n")
         }
         return EnvelopeOutcome(appended, status, parsed["failureMessage"] as? String)
@@ -232,6 +237,7 @@ class PlanExecutor(
         status: String,
         reason: String,
         stdoutRel: String,
+        inputContextRel: String,
         exitCode: Int,
         startedAt: Instant,
         endedAt: Instant,
@@ -248,6 +254,7 @@ class PlanExecutor(
         sb.append(",\"executorEndedAt\":").append(jsonString(endedAt.toString()))
         sb.append(",\"spawnExitCode\":").append(exitCode)
         sb.append(",\"capturedStdoutLog\":").append(jsonString(stdoutRel))
+        sb.append(",\"inputContextFile\":").append(jsonString(inputContextRel))
         sb.append(",\"assertions\":[]")
         sb.append(",\"artifacts\":[]")
         sb.append(",\"processes\":[]")

@@ -218,11 +218,12 @@ Use the failed run's report directory:
 <test_graph>/build/validation-reports/<runId>/
   envelope/<node-id>.json
   node-logs/
-  context/step-NNN.json
+  context/<node-id>.input.json
 ```
 
 Inspect `report.md`, `summary.json`, the failed node envelope, and its logs.
-Then rerun the node script directly with the standard node args. For Python:
+Then rerun the node script directly with the standard node args. Reuse the
+failed node's saved input context. For Python:
 
 ```bash
 uv run sources/my_node.py \
@@ -230,7 +231,7 @@ uv run sources/my_node.py \
   --runId=<runId> \
   --reportDir=<test_graph>/build/validation-reports/<runId> \
   --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
-  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+  --context=@<test_graph>/build/validation-reports/<runId>/context/<node-id>.input.json
 ```
 
 For Java/JBang:
@@ -241,12 +242,12 @@ jbang sources/MyNode.java \
   --runId=<runId> \
   --reportDir=<test_graph>/build/validation-reports/<runId> \
   --result-out=<test_graph>/build/validation-reports/<runId>/.tmp-results/<node-id>.json \
-  --context=@<test_graph>/build/validation-reports/<runId>/context/step-NNN.json
+  --context=@<test_graph>/build/validation-reports/<runId>/context/<node-id>.input.json
 ```
 
-If no spilled context file exists, pass inline context with
-`--context='{"items":[...]}'`, using upstream envelopes' `published` blocks. Omit
-`--context` only for root nodes with no dependencies.
+Every attempted node writes an input-context snapshot, including root nodes
+whose snapshot contains an empty `items` array. Omit `--context` only when
+manually rerunning a root node with no dependencies.
 
 After the targeted node passes, run the containing graph once from the beginning:
 
@@ -279,7 +280,8 @@ Every run writes under the scaffolded project's build directory:
   node-logs/
     <node-id>.<label>.log
   context/
-    step-NNN.json
+    <node-id>.input.json
+    step-NNN.json       # only when a large runtime --context arg spills
   summary.json
   report.md
 ```

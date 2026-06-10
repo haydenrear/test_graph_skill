@@ -1,9 +1,9 @@
-"""Repository-local adapters for TestGraph current-model cases.
+"""Repository-local adapters for TestGraph program-model cases.
 
-The TG-3 workflow starts equivalent to the accepted program model. These
-adapters stay non-executable until each production slice updates
-``specs/current`` with real setup, invocation, observation, and refinement
-against generated state-graph cases.
+The first onboarding baseline records the semantic boundaries and keeps the
+adapters non-executable. A later ticket can replace ``can_run=False`` with
+real setup, invocation, observation, and refinement against the generated
+state-graph cases.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ class _DocumentedBoundaryAdapter:
     def can_run(self, case):
         del case
         return False, (
-            f"{self.boundary} is documented in specs/current/spec_manifest.yaml; "
-            "wire an executable refinement adapter when the matching TG-3 slice lands"
+            f"{self.boundary} is documented in specs/program_model/spec_manifest.yaml; "
+            "wire an executable refinement adapter in a future behavior ticket"
         )
 
 
@@ -43,16 +43,6 @@ class GraphRunAdapter(_DocumentedBoundaryAdapter):
         "scripts/run.py",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunTestGraphTask.kt",
         "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
-    )
-
-
-class InputContextSnapshotAdapter(_DocumentedBoundaryAdapter):
-    boundary = "input_context_snapshots"
-    files = (
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/Context.kt",
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/exec/PlanExecutor.kt",
-        "project_sdk_sources/build-logic/src/main/kotlin/com/hayden/testgraphsdk/tasks/RunReportWriter.kt",
-        "project_sdk_sources/sources/ContextSnapshotsPresent.py",
     )
 
 

@@ -204,7 +204,7 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 One CLI arg, two encodings:
 
 - **Inline** (≤ 8 KB): `--context={"items":[{"nodeId":"user.seeded","data":{"userId":"u-1a2b"}}, ...]}`
-- **File ref** (larger): `--context=@<abs-path>` — plugin writes JSON to `<reportDir>/context/step-NNN.json`.
+- **File ref**: `--context=@<abs-path>` — every attempted node has its exact input context saved at `<reportDir>/context/<node-id>.input.json`; large runtime args may also spill to `<reportDir>/context/step-NNN.json`.
 
 ### Shape
 
@@ -276,7 +276,8 @@ Each run writes under `build/validation-reports/<runId>/`:
 ```
 build/validation-reports/<runId>/
   envelope/<nodeId>.json     # canonical per-node envelope
-  context/step-NNN.json      # (optional) spilled context payloads
+  context/<nodeId>.input.json # exact input Context[] for that node attempt
+  context/step-NNN.json      # optional large runtime --context spill file
   summary.json               # aggregated summary (written inline at end of run)
   report.md                  # markdown rollup (same)
 ```

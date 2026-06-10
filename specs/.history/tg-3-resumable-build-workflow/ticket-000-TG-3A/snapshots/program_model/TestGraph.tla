@@ -29,7 +29,6 @@ VARIABLES
   terminal_nodes,
   envelopes,
   context_items,
-  input_contexts,
   run_reports,
   package_catalog,
   result
@@ -38,10 +37,7 @@ vars ==
   << scaffolded, declared_graphs, explicit_nodes, script_deps, described_nodes,
      dsl_deps, overlays, resolved_nodes, planned_graphs, plan_docs,
      active_graphs, passed_nodes, terminal_nodes, envelopes, context_items,
-     input_contexts, run_reports, package_catalog, result >>
-
-input_snapshot_vars ==
-  << input_contexts >>
+     run_reports, package_catalog, result >>
 
 AvailableFor(g) ==
   SourceNodes
@@ -96,7 +92,6 @@ Init ==
   /\ terminal_nodes = [g \in Graphs |-> {}]
   /\ envelopes = [g \in Graphs |-> {}]
   /\ context_items = [g \in Graphs |-> {}]
-  /\ input_contexts = [g \in Graphs |-> {}]
   /\ run_reports = {}
   /\ package_catalog = {}
   /\ result = [accepted |-> TRUE, reason |-> NoReason]
@@ -113,7 +108,6 @@ ScaffoldProject ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command RegisterGraph
 \* @result WorkflowResult
@@ -129,7 +123,6 @@ RegisterGraph(g) ==
                   resolved_nodes, planned_graphs, plan_docs, active_graphs,
                   passed_nodes, terminal_nodes, envelopes, context_items,
                   run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command AddExplicitNode
 \* @result WorkflowResult
@@ -145,7 +138,6 @@ AddExplicitNode(g, n) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command AddScriptDependency
 \* @result WorkflowResult
@@ -162,7 +154,6 @@ AddScriptDependency(n, d) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command DescribeNode
 \* @result WorkflowResult
@@ -176,7 +167,6 @@ DescribeNode(n) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command ApplyDslOverlay
 \* @result WorkflowResult
@@ -195,7 +185,6 @@ ApplyDslOverlay(g, n, d) ==
                   described_nodes, resolved_nodes, planned_graphs, plan_docs,
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command ResolveNode
 \* @result WorkflowResult
@@ -215,7 +204,6 @@ ResolveNode(g, n) ==
                   described_nodes, dsl_deps, overlays, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command PlanGraph
 \* @result WorkflowResult
@@ -235,7 +223,6 @@ PlanGraph(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command StartRun
 \* @result WorkflowResult
@@ -249,7 +236,6 @@ StartRun(g) ==
   /\ terminal_nodes' = [terminal_nodes EXCEPT ![g] = {}]
   /\ envelopes' = [envelopes EXCEPT ![g] = {}]
   /\ context_items' = [context_items EXCEPT ![g] = {}]
-  /\ input_contexts' = [input_contexts EXCEPT ![g] = {}]
   /\ run_reports' = run_reports \ {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
@@ -268,7 +254,6 @@ RunNodePass(g, n) ==
   /\ passed_nodes' = [passed_nodes EXCEPT ![g] = @ \cup {n}]
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
   /\ context_items' = [context_items EXCEPT ![g] = @ \cup {n}]
-  /\ input_contexts' = [input_contexts EXCEPT ![g] = @ \cup {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                   described_nodes, dsl_deps, overlays, resolved_nodes,
@@ -286,7 +271,6 @@ RunNodeTerminal(g, n) ==
   /\ MergedDeps(g, n) \subseteq passed_nodes[g]
   /\ terminal_nodes' = [terminal_nodes EXCEPT ![g] = @ \cup {n}]
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
-  /\ input_contexts' = [input_contexts EXCEPT ![g] = @ \cup {n}]
   /\ active_graphs' = active_graphs \ {g}
   /\ result' = [accepted |-> FALSE, reason |-> "NODE_NOT_PASSED"]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
@@ -309,7 +293,6 @@ WriteInlineReport(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, passed_nodes, terminal_nodes,
                   envelopes, context_items, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command RebuildReport
 \* @result WorkflowResult
@@ -324,7 +307,6 @@ RebuildReport(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
 
 \* @command CleanBuild
 \* @result WorkflowResult
@@ -336,7 +318,6 @@ CleanBuild ==
   /\ terminal_nodes' = [g \in Graphs |-> {}]
   /\ envelopes' = [g \in Graphs |-> {}]
   /\ context_items' = [g \in Graphs |-> {}]
-  /\ input_contexts' = [g \in Graphs |-> {}]
   /\ run_reports' = {}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
@@ -392,7 +373,6 @@ TypeInvariant ==
   /\ terminal_nodes \in [Graphs -> SUBSET SourceNodes]
   /\ envelopes \in [Graphs -> SUBSET SourceNodes]
   /\ context_items \in [Graphs -> SUBSET SourceNodes]
-  /\ input_contexts \in [Graphs -> SUBSET SourceNodes]
   /\ run_reports \subseteq Graphs
   /\ package_catalog \subseteq Packages
   /\ result.accepted \in BOOLEAN
@@ -441,11 +421,6 @@ ContextContainsOnlyPassedPublishedData ==
 EveryAttemptGetsOneEnvelope ==
   \A g \in Graphs:
     passed_nodes[g] \cup terminal_nodes[g] \subseteq envelopes[g]
-
-\* @invariant EveryAttemptHasSavedInputContext
-EveryAttemptHasSavedInputContext ==
-  \A g \in Graphs:
-    envelopes[g] \subseteq input_contexts[g]
 
 \* @invariant ReportsHaveEnvelopeEvidence
 ReportsHaveEnvelopeEvidence ==

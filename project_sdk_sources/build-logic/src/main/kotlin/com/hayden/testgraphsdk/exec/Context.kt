@@ -101,6 +101,23 @@ object ContextSerde {
 }
 
 /**
+ * Persist the exact Context[] input a node receives before the node process
+ * starts. Unlike [encodeContextArg], this always writes a build artifact,
+ * including root nodes with an empty Context[] and small contexts that still
+ * ride inline on the command line.
+ */
+internal fun writeInputContextSnapshot(
+    items: List<ContextItem>,
+    reportRoot: File,
+    nodeId: String,
+): File {
+    val dir = File(reportRoot, "context").apply { mkdirs() }
+    val file = File(dir, "${safeContextFileStem(nodeId)}.input.json")
+    file.writeText(ContextSerde.toJson(items))
+    return file
+}
+
+/**
  * Writes the Context[] inline or to disk depending on size, and returns
  * the string to pass as --context=<value>.
  */
@@ -116,3 +133,6 @@ internal fun encodeContextArg(
     file.writeText(json)
     return "@" + file.absolutePath
 }
+
+private fun safeContextFileStem(nodeId: String): String =
+    nodeId.replace(Regex("[^A-Za-z0-9._-]"), "_")

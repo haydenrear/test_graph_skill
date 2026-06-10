@@ -97,17 +97,21 @@ internal object RunReportWriter {
         sb.append(")\n\n")
 
         // Plan summary table — quickest scan path: status + duration per node.
-        sb.append("| Node | Status | Duration | Captured stdout |\n")
-        sb.append("|---|---|---|---|\n")
+        sb.append("| Node | Status | Duration | Input context | Captured stdout |\n")
+        sb.append("|---|---|---|---|---|\n")
         for ((_, env) in envelopes) {
             val nodeId = (env["nodeId"] as? String) ?: "?"
             val status = (env["status"] as? String) ?: "?"
             val durationMs = durationFromExecutor(env)
             val durationStr = if (durationMs >= 0) "${durationMs}ms" else "—"
+            val inputContextPath = env["inputContextFile"] as? String
+            val inputContextCell = if (inputContextPath != null) "[$inputContextPath]($inputContextPath)" else "—"
             val stdoutPath = env["capturedStdoutLog"] as? String
             val stdoutCell = if (stdoutPath != null) "[$stdoutPath]($stdoutPath)" else "—"
             sb.append("| `").append(nodeId).append("` | ").append(badge(status))
-              .append(" | ").append(durationStr).append(" | ").append(stdoutCell).append(" |\n")
+              .append(" | ").append(durationStr)
+              .append(" | ").append(inputContextCell)
+              .append(" | ").append(stdoutCell).append(" |\n")
         }
         sb.append('\n')
 
@@ -147,6 +151,12 @@ internal object RunReportWriter {
         }
         if (timingLines.isNotEmpty()) {
             sb.append(timingLines.joinToString(separator = "  \n")).append("\n\n")
+        }
+
+        val inputContextPath = env["inputContextFile"] as? String
+        if (inputContextPath != null) {
+            sb.append("**Input context**: [")
+              .append(inputContextPath).append("](").append(inputContextPath).append(")\n\n")
         }
 
         renderAssertions(sb, env["assertions"])

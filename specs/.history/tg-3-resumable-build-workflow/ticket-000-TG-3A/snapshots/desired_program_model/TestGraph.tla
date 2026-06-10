@@ -1,10 +1,10 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Accepted whole-program model for the test-graph skill. The product is a
-\* validation DAG runner, so graph definitions, script metadata, DSL overlays,
-\* dependency resolution, node execution, context flow, and report emission are
-\* program semantics. Package paths and command recipes live in the manifest.
+\* Desired whole-program model for TG-3. The accepted baseline already models
+\* graph definition, dependency resolution, node execution, published context,
+\* and reports. TG-3 adds build-directory input context snapshots plus
+\* explicit resume and single-node rerun semantics.
 
 CONSTANTS
   Graphs,
@@ -30,6 +30,10 @@ VARIABLES
   envelopes,
   context_items,
   input_contexts,
+  rerunnable_nodes,
+  rerun_guidance,
+  resumed_nodes,
+  single_node_reruns,
   run_reports,
   package_catalog,
   result
@@ -38,10 +42,12 @@ vars ==
   << scaffolded, declared_graphs, explicit_nodes, script_deps, described_nodes,
      dsl_deps, overlays, resolved_nodes, planned_graphs, plan_docs,
      active_graphs, passed_nodes, terminal_nodes, envelopes, context_items,
-     input_contexts, run_reports, package_catalog, result >>
+     input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
+     single_node_reruns, run_reports, package_catalog, result >>
 
-input_snapshot_vars ==
-  << input_contexts >>
+resumption_vars ==
+  << input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
+     single_node_reruns >>
 
 AvailableFor(g) ==
   SourceNodes
@@ -97,6 +103,10 @@ Init ==
   /\ envelopes = [g \in Graphs |-> {}]
   /\ context_items = [g \in Graphs |-> {}]
   /\ input_contexts = [g \in Graphs |-> {}]
+  /\ rerunnable_nodes = SourceNodes
+  /\ rerun_guidance = [g \in Graphs |-> {}]
+  /\ resumed_nodes = [g \in Graphs |-> {}]
+  /\ single_node_reruns = [g \in Graphs |-> {}]
   /\ run_reports = {}
   /\ package_catalog = {}
   /\ result = [accepted |-> TRUE, reason |-> NoReason]
@@ -113,7 +123,7 @@ ScaffoldProject ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command RegisterGraph
 \* @result WorkflowResult
@@ -129,7 +139,7 @@ RegisterGraph(g) ==
                   resolved_nodes, planned_graphs, plan_docs, active_graphs,
                   passed_nodes, terminal_nodes, envelopes, context_items,
                   run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command AddExplicitNode
 \* @result WorkflowResult
@@ -145,7 +155,7 @@ AddExplicitNode(g, n) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command AddScriptDependency
 \* @result WorkflowResult
@@ -162,7 +172,7 @@ AddScriptDependency(n, d) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command DescribeNode
 \* @result WorkflowResult
@@ -176,7 +186,23 @@ DescribeNode(n) ==
                   dsl_deps, overlays, resolved_nodes, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
+
+\* @command SetNodeRerunDisabled
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.set_node_rerun_disabled
+SetNodeRerunDisabled(n) ==
+  /\ scaffolded
+  /\ n \in SourceNodes
+  /\ n \notin described_nodes
+  /\ rerunnable_nodes' = rerunnable_nodes \ {n}
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, active_graphs, passed_nodes,
+                  terminal_nodes, envelopes, context_items, input_contexts,
+                  rerun_guidance, resumed_nodes, single_node_reruns,
+                  run_reports, package_catalog >>
 
 \* @command ApplyDslOverlay
 \* @result WorkflowResult
@@ -195,7 +221,7 @@ ApplyDslOverlay(g, n, d) ==
                   described_nodes, resolved_nodes, planned_graphs, plan_docs,
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command ResolveNode
 \* @result WorkflowResult
@@ -215,7 +241,7 @@ ResolveNode(g, n) ==
                   described_nodes, dsl_deps, overlays, planned_graphs,
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command PlanGraph
 \* @result WorkflowResult
@@ -235,7 +261,7 @@ PlanGraph(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command StartRun
 \* @result WorkflowResult
@@ -250,11 +276,57 @@ StartRun(g) ==
   /\ envelopes' = [envelopes EXCEPT ![g] = {}]
   /\ context_items' = [context_items EXCEPT ![g] = {}]
   /\ input_contexts' = [input_contexts EXCEPT ![g] = {}]
+  /\ rerun_guidance' = [rerun_guidance EXCEPT ![g] = {}]
+  /\ resumed_nodes' = [resumed_nodes EXCEPT ![g] = {}]
+  /\ single_node_reruns' = [single_node_reruns EXCEPT ![g] = {}]
   /\ run_reports' = run_reports \ {g}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                   described_nodes, dsl_deps, overlays, resolved_nodes,
-                  planned_graphs, plan_docs, package_catalog >>
+                  planned_graphs, plan_docs, package_catalog,
+                  rerunnable_nodes >>
+
+\* @command ResumeRunFromBuild
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.resume_run_from_build
+ResumeRunFromBuild(g, n) ==
+  /\ scaffolded
+  /\ g \in planned_graphs
+  /\ g \notin active_graphs
+  /\ n \in resolved_nodes[g]
+  /\ n \in input_contexts[g]
+  /\ n \in rerunnable_nodes
+  /\ MergedDeps(g, n) \subseteq passed_nodes[g]
+  /\ active_graphs' = active_graphs \cup {g}
+  /\ resumed_nodes' = [resumed_nodes EXCEPT ![g] = @ \cup {n}]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, passed_nodes, terminal_nodes,
+                  envelopes, context_items, input_contexts,
+                  rerunnable_nodes, rerun_guidance, single_node_reruns,
+                  run_reports, package_catalog >>
+
+\* @command RunOnlyNodeFromBuild
+\* @result NodeRunResult
+\* @port TestGraphProgramPort.run_only_node_from_build
+RunOnlyNodeFromBuild(g, n) ==
+  /\ scaffolded
+  /\ g \in planned_graphs
+  /\ n \in resolved_nodes[g]
+  /\ n \in input_contexts[g]
+  /\ n \in rerunnable_nodes
+  /\ MergedDeps(g, n) \subseteq passed_nodes[g]
+  /\ single_node_reruns' = [single_node_reruns EXCEPT ![g] = @ \cup {n}]
+  /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
+  /\ rerun_guidance' = [rerun_guidance EXCEPT ![g] = @ \ {n}]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, active_graphs, passed_nodes,
+                  terminal_nodes, context_items, input_contexts,
+                  rerunnable_nodes, resumed_nodes, run_reports,
+                  package_catalog >>
 
 \* @command RunNodePass
 \* @result NodeRunResult
@@ -263,17 +335,22 @@ RunNodePass(g, n) ==
   /\ scaffolded
   /\ g \in active_graphs
   /\ n \in resolved_nodes[g]
-  /\ n \notin envelopes[g]
+  /\ n \notin passed_nodes[g]
+  /\ (n \notin envelopes[g] \/ n \in terminal_nodes[g])
+  /\ (n \notin terminal_nodes[g] \/ n \in rerunnable_nodes)
   /\ MergedDeps(g, n) \subseteq passed_nodes[g]
   /\ passed_nodes' = [passed_nodes EXCEPT ![g] = @ \cup {n}]
+  /\ terminal_nodes' = [terminal_nodes EXCEPT ![g] = @ \ {n}]
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
   /\ context_items' = [context_items EXCEPT ![g] = @ \cup {n}]
   /\ input_contexts' = [input_contexts EXCEPT ![g] = @ \cup {n}]
+  /\ rerun_guidance' = [rerun_guidance EXCEPT ![g] = @ \ {n}]
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                   described_nodes, dsl_deps, overlays, resolved_nodes,
-                  planned_graphs, plan_docs, active_graphs, terminal_nodes,
-                  run_reports, package_catalog >>
+                  planned_graphs, plan_docs, active_graphs, run_reports,
+                  package_catalog, rerunnable_nodes, resumed_nodes,
+                  single_node_reruns >>
 
 \* @command RunNodeTerminal
 \* @result NodeRunResult
@@ -282,17 +359,23 @@ RunNodeTerminal(g, n) ==
   /\ scaffolded
   /\ g \in active_graphs
   /\ n \in resolved_nodes[g]
-  /\ n \notin envelopes[g]
+  /\ n \notin passed_nodes[g]
+  /\ (n \notin envelopes[g] \/ n \in terminal_nodes[g])
+  /\ (n \notin terminal_nodes[g] \/ n \in rerunnable_nodes)
   /\ MergedDeps(g, n) \subseteq passed_nodes[g]
   /\ terminal_nodes' = [terminal_nodes EXCEPT ![g] = @ \cup {n}]
   /\ envelopes' = [envelopes EXCEPT ![g] = @ \cup {n}]
   /\ input_contexts' = [input_contexts EXCEPT ![g] = @ \cup {n}]
+  /\ rerun_guidance' =
+      [rerun_guidance EXCEPT ![g] =
+        IF n \in rerunnable_nodes THEN @ \cup {n} ELSE @ \ {n}]
   /\ active_graphs' = active_graphs \ {g}
   /\ result' = [accepted |-> FALSE, reason |-> "NODE_NOT_PASSED"]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, passed_nodes, context_items,
-                  run_reports, package_catalog >>
+                  run_reports, package_catalog, rerunnable_nodes,
+                  resumed_nodes, single_node_reruns >>
 
 \* @command WriteInlineReport
 \* @result WorkflowResult
@@ -309,7 +392,7 @@ WriteInlineReport(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, passed_nodes, terminal_nodes,
                   envelopes, context_items, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command RebuildReport
 \* @result WorkflowResult
@@ -324,7 +407,7 @@ RebuildReport(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, package_catalog >>
-  /\ UNCHANGED input_snapshot_vars
+  /\ UNCHANGED resumption_vars
 
 \* @command CleanBuild
 \* @result WorkflowResult
@@ -337,11 +420,15 @@ CleanBuild ==
   /\ envelopes' = [g \in Graphs |-> {}]
   /\ context_items' = [g \in Graphs |-> {}]
   /\ input_contexts' = [g \in Graphs |-> {}]
+  /\ rerun_guidance' = [g \in Graphs |-> {}]
+  /\ resumed_nodes' = [g \in Graphs |-> {}]
+  /\ single_node_reruns' = [g \in Graphs |-> {}]
   /\ run_reports' = {}
   /\ result' = [accepted |-> TRUE, reason |-> NoReason]
   /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                   described_nodes, dsl_deps, overlays, resolved_nodes,
-                  planned_graphs, plan_docs, package_catalog >>
+                  planned_graphs, plan_docs, package_catalog,
+                  rerunnable_nodes >>
 
 NoOp ==
   UNCHANGED vars
@@ -356,6 +443,8 @@ Next ==
       AddScriptDependency(n, d)
   \/ \E n \in Nodes:
       DescribeNode(n)
+  \/ \E n \in Nodes:
+      SetNodeRerunDisabled(n)
   \/ \E g \in Graphs, n \in Nodes, d \in Nodes:
       ApplyDslOverlay(g, n, d)
   \/ \E g \in Graphs, n \in Nodes:
@@ -364,6 +453,10 @@ Next ==
       PlanGraph(g)
   \/ \E g \in Graphs:
       StartRun(g)
+  \/ \E g \in Graphs, n \in Nodes:
+      ResumeRunFromBuild(g, n)
+  \/ \E g \in Graphs, n \in Nodes:
+      RunOnlyNodeFromBuild(g, n)
   \/ \E g \in Graphs, n \in Nodes:
       RunNodePass(g, n)
   \/ \E g \in Graphs, n \in Nodes:
@@ -393,6 +486,10 @@ TypeInvariant ==
   /\ envelopes \in [Graphs -> SUBSET SourceNodes]
   /\ context_items \in [Graphs -> SUBSET SourceNodes]
   /\ input_contexts \in [Graphs -> SUBSET SourceNodes]
+  /\ rerunnable_nodes \subseteq SourceNodes
+  /\ rerun_guidance \in [Graphs -> SUBSET SourceNodes]
+  /\ resumed_nodes \in [Graphs -> SUBSET SourceNodes]
+  /\ single_node_reruns \in [Graphs -> SUBSET SourceNodes]
   /\ run_reports \subseteq Graphs
   /\ package_catalog \subseteq Packages
   /\ result.accepted \in BOOLEAN
@@ -446,6 +543,23 @@ EveryAttemptGetsOneEnvelope ==
 EveryAttemptHasSavedInputContext ==
   \A g \in Graphs:
     envelopes[g] \subseteq input_contexts[g]
+
+\* @invariant RerunGuidanceOnlyForRerunnableFailures
+RerunGuidanceOnlyForRerunnableFailures ==
+  \A g \in Graphs:
+    /\ rerun_guidance[g] \subseteq terminal_nodes[g]
+    /\ rerun_guidance[g] \subseteq rerunnable_nodes
+
+\* @invariant ResumptionsUseSavedInputContext
+ResumptionsUseSavedInputContext ==
+  \A g \in Graphs:
+    (resumed_nodes[g] \cup single_node_reruns[g]) \subseteq input_contexts[g]
+
+\* @invariant BuildRerunsRespectDependencies
+BuildRerunsRespectDependencies ==
+  \A g \in Graphs:
+    \A n \in resumed_nodes[g] \cup single_node_reruns[g]:
+      MergedDeps(g, n) \subseteq passed_nodes[g]
 
 \* @invariant ReportsHaveEnvelopeEvidence
 ReportsHaveEnvelopeEvidence ==

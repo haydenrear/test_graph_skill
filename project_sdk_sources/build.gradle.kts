@@ -47,6 +47,10 @@ validationGraph {
             .dependsOn("network.pingable")
             .tags("regression")
 
+        // Verifies the run build directory captured the input Context[]
+        // for each node, which is the artifact later resume/rerun work uses.
+        node("sources/ContextSnapshotsPresent.py")
+
         // app.running is NOT listed as a node(...) call here — it's pulled
         // in transitively because user.seeded (script) + NetworkPingable (DSL)
         // + LoginSmoke (script) all declare it, and the plugin finds
