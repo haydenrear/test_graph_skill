@@ -23,6 +23,7 @@ class NodeSpec:
     _tags: list[str] = field(default_factory=list)
     _timeout: str = "60s"
     _retries: int = 0
+    _rerun: bool = True
     _cacheable: bool = False
     _side_effects: list[str] = field(default_factory=list)
     _inputs: dict[str, str] = field(default_factory=dict)
@@ -60,6 +61,20 @@ class NodeSpec:
         self._retries = max(0, n)
         return self
 
+    def rerun(self, enabled: bool = True) -> "NodeSpec":
+        """Control whether failed-run guidance should offer a direct rerun.
+
+        Defaults to ``True``. Set ``False`` for nodes where replaying from
+        the previous build-directory input context is unsafe because the node
+        mutates non-idempotent resources, claims external state, consumes a
+        one-shot token, or otherwise cannot be retried from context alone.
+
+        This is distinct from :meth:`retries`, which controls automatic
+        executor attempts after timeouts.
+        """
+        self._rerun = bool(enabled)
+        return self
+
     def cacheable(self, b: bool = True) -> "NodeSpec":
         self._cacheable = b
         return self
@@ -94,6 +109,7 @@ class NodeSpec:
                 "tags": list(self._tags),
                 "timeout": self._timeout,
                 "retries": self._retries,
+                "rerun": self._rerun,
                 "cacheable": self._cacheable,
                 "sideEffects": list(self._side_effects),
                 "inputs": dict(self._inputs),

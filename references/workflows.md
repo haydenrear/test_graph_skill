@@ -14,6 +14,8 @@ SDK surface.
   `build.gradle.kts` via `testGraph("name") { ... }`.
 - The DSL can add overlays with `.dependsOn(...)`, `.tags(...)`,
   `.timeout(...)`, `.cacheable(...)`, and `.sideEffects(...)`.
+- Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
+  guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching
   script-declared node ids.
 - Data flows downstream through `Context[]`. Publish with

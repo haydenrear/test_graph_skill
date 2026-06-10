@@ -18,12 +18,13 @@ UPSTREAM_NODE_IDS = [
     "user.seeded",
     "network.pingable",
     "login.smoke",
+    "rerun.disabled.probe",
 ]
 
 SPEC = (
     NodeSpec("context.snapshots.present")
     .kind("assertion")
-    .depends_on("login.smoke")
+    .depends_on("login.smoke", "rerun.disabled.probe")
     .tags("smoke", "resume")
     .timeout("30s")
     .output("snapshotCount", "integer")

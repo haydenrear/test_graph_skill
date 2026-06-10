@@ -47,6 +47,10 @@ validationGraph {
             .dependsOn("network.pingable")
             .tags("regression")
 
+        // Describe metadata coverage for NodeSpec.rerun(false). It is
+        // consumed by the context snapshot assertion below.
+        node("sources/RerunDisabledProbe.py")
+
         // Verifies the run build directory captured the input Context[]
         // for each node, which is the artifact later resume/rerun work uses.
         node("sources/ContextSnapshotsPresent.py")

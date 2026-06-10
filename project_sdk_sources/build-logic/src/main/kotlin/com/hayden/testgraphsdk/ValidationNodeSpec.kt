@@ -23,6 +23,12 @@ data class ValidationNodeSpec(
      * `.retries(n)`); most nodes are stateful and not safely re-runnable.
      */
     val retries: Int = 0,
+    /**
+     * Whether failed-run output should suggest a direct rerun command from the
+     * saved build-directory input context. Defaults true and is independent of
+     * timeout [retries], which are automatic executor attempts.
+     */
+    val rerun: Boolean = true,
     val cacheable: Boolean = false,
     val sideEffects: Set<String> = emptySet(),
     val inputs: Map<String, String> = emptyMap(),

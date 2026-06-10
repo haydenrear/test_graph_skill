@@ -91,7 +91,7 @@ Rerun from the beginning immediately when the fix changes a dependency node, sha
 - A node is one validation unit with a stable dotted id, one kind, one runtime, optional dependencies, and a `NodeResult`.
 - The script is the source of truth. It emits `NodeSpec` in `--describe-out=<path>` mode; there are no YAML sidecars.
 - A graph is declared in the scaffolded `build.gradle.kts` with `testGraph("name") { ... }`.
-- `node("sources/Foo.java")` or `node("sources/foo.py")` adds an explicit node. `.dependsOn(...)`, `.tags(...)`, `.timeout(...)`, `.cacheable(...)`, and `.sideEffects(...)` overlay script metadata.
+- `node("sources/Foo.java")` or `node("sources/foo.py")` adds an explicit node. `.dependsOn(...)`, `.tags(...)`, `.timeout(...)`, `.cacheable(...)`, and `.sideEffects(...)` overlay script metadata. Use script-level `NodeSpec.rerun(false)` only when direct replay from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` when a node depends on another node id that was not listed explicitly in the graph DSL.
 - Data flows downstream through `Context[]`. Publish with `NodeResult.publish(key, value)` and read with `ctx.get(upstreamId, key)`.
 - Reports live under `<test_graph>/build/validation-reports/<runId>/`.

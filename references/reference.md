@@ -19,6 +19,8 @@ emitted JSON; no YAML sidecar.
 | `dependsOn`    | list\<string\>                                                              | no       | Upstream node ids.                                             |
 | `tags`         | list\<string\>                                                              | no       | Free-form labels.                                              |
 | `timeout`      | duration (`30s`, `2m`)                                                      | no       | Default: `60s`.                                                |
+| `retries`      | integer                                                                     | no       | Extra executor attempts after timeouts only. Default: 0.       |
+| `rerun`        | boolean                                                                     | no       | Default: true. Controls whether failed-run guidance should offer direct rerun from saved input context. |
 | `cacheable`    | boolean                                                                     | no       | Default: false. Only true if the node is a pure function of its inputs. |
 | `sideEffects`  | list\<string\>                                                              | no       | Free-form: `browser`, `db:writes`, `fs:tmp`, `net:external`.   |
 | `inputs`       | map\<string, type\>                                                         | no       | Typed inputs the node reads from context.                      |
@@ -35,6 +37,7 @@ NodeSpec.of("login.smoke")
     .dependsOn("app.running", "user.seeded")
     .tags("smoke", "ui")
     .timeout("120s")
+    .rerun(false)
     .cacheable(false)
     .sideEffects("browser")
     .input("baseUrl", "string")
@@ -51,6 +54,7 @@ NodeSpec("login.smoke") \
     .depends_on("app.running", "user.seeded") \
     .tags("smoke", "ui") \
     .timeout("120s") \
+    .rerun(False) \
     .cacheable(False) \
     .side_effects("browser") \
     .input("baseUrl", "string") \
@@ -68,6 +72,12 @@ the spec JSON and exits 0 without running the body. Debug manually:
 jbang sources/LoginSmoke.java  --describe-out=/tmp/spec.json
 uv run sources/user_seeded.py  --describe-out=/tmp/spec.json
 ```
+
+Use `rerun(false)` only when replaying the node from the previous
+`context/<node-id>.input.json` would be unsafe: for example, non-idempotent
+external mutations, one-shot tokens, claimed ports, or resources that cannot be
+reconstructed from the saved context. This is independent of `retries(...)`,
+which controls automatic retry after executor timeouts.
 
 ## Gradle DSL
 
