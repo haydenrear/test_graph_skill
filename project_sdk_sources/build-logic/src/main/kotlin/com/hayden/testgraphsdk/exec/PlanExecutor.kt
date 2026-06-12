@@ -32,6 +32,7 @@ class PlanExecutor(
     private val reportDir: Directory,
     private val runId: String,
     private val logger: Logger,
+    private val graphName: String,
 ) {
     enum class BuildReplayMode {
         RESUME_GRAPH,
@@ -123,8 +124,22 @@ class PlanExecutor(
                 executorEndedAt = endedAt,
                 reportRoot = reportRoot,
                 inputContextFile = inputContextFile,
+                rerunGuidance = null,
             )
-            envelope.writeText(outcome.envelopeJson)
+            val rerunGuidance = if (outcome.status != "passed" && spec.rerun) {
+                buildRerunGuidance(spec, reportRoot, inputContextFile)
+            } else {
+                null
+            }
+            val envelopeJson = if (rerunGuidance == null) {
+                outcome.envelopeJson
+            } else {
+                logger.lifecycle("rerun guidance for '${spec.id}':")
+                logger.lifecycle("  resume graph: ${rerunGuidance.resumeGraphCommand}")
+                logger.lifecycle("  run only: ${rerunGuidance.runOnlyCommand}")
+                addRerunGuidance(outcome.envelopeJson, rerunGuidance)
+            }
+            envelope.writeText(envelopeJson)
 
             cumulative += readContextItem(spec.id)
 
@@ -211,6 +226,12 @@ class PlanExecutor(
         val reason: String?,
     )
 
+    private data class RerunGuidance(
+        val resumeGraphCommand: String,
+        val runOnlyCommand: String,
+        val inputContextFile: String,
+    )
+
     /**
      * Post-process the SDK's --result-out file into the canonical
      * envelope. Five cases:
@@ -238,6 +259,7 @@ class PlanExecutor(
         executorEndedAt: Instant,
         reportRoot: File,
         inputContextFile: File,
+        rerunGuidance: RerunGuidance?,
     ): EnvelopeOutcome {
         val stdoutRel = relativeToReport(reportRoot, stdoutLog)
         val inputContextRel = relativeToReport(reportRoot, inputContextFile)
@@ -250,6 +272,7 @@ class PlanExecutor(
                 "node timed out after ${spec.timeout}$attemptsClause; " +
                         "executor force-killed the subprocess (see capturedStdoutLog)",
                 stdoutRel, inputContextRel, -1, executorStartedAt, executorEndedAt,
+                rerunGuidance = rerunGuidance,
             )
         }
         val exitCode = (execOutcome as ExecutionOutcome.Completed).exitCode
@@ -260,6 +283,7 @@ class PlanExecutor(
                 "node exited $exitCode without writing --result-out " +
                         "(see capturedStdoutLog for stdout/stderr)",
                 stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
+                rerunGuidance = rerunGuidance,
             )
         }
 
@@ -271,6 +295,7 @@ class PlanExecutor(
                 "node wrote malformed --result-out (not a JSON object); see capturedStdoutLog",
                 stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
                 malformedRaw = raw,
+                rerunGuidance = rerunGuidance,
             )
         }
         val status = parsed["status"] as? String
@@ -280,6 +305,7 @@ class PlanExecutor(
                 "node wrote --result-out with invalid status=${status ?: "<missing>"}; see capturedStdoutLog",
                 stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
                 malformedRaw = raw,
+                rerunGuidance = rerunGuidance,
             )
         }
 
@@ -298,6 +324,7 @@ class PlanExecutor(
             append(",\"spawnExitCode\":").append(exitCode)
             append(",\"capturedStdoutLog\":").append(jsonString(stdoutRel))
             append(",\"inputContextFile\":").append(jsonString(inputContextRel))
+            appendRerunGuidance(rerunGuidance)
             append("}\n")
         }
         return EnvelopeOutcome(appended, status, parsed["failureMessage"] as? String)
@@ -318,6 +345,7 @@ class PlanExecutor(
         startedAt: Instant,
         endedAt: Instant,
         malformedRaw: String? = null,
+        rerunGuidance: RerunGuidance? = null,
     ): EnvelopeOutcome {
         val sb = StringBuilder()
         sb.append("{")
@@ -337,6 +365,7 @@ class PlanExecutor(
         sb.append(",\"metrics\":{}")
         sb.append(",\"logs\":[]")
         sb.append(",\"published\":{}")
+        sb.appendRerunGuidance(rerunGuidance)
         if (malformedRaw != null) {
             sb.append(",\"malformedResultOutPreview\":")
             sb.append(jsonString(malformedRaw.take(MALFORMED_PREVIEW_BYTES)))
@@ -353,6 +382,42 @@ class PlanExecutor(
         } catch (e: IllegalArgumentException) {
             target.absolutePath
         }
+
+    private fun buildRerunGuidance(
+        spec: ValidationNodeSpec,
+        reportRoot: File,
+        inputContextFile: File,
+    ): RerunGuidance {
+        val buildArg = shellQuote(reportRoot.absolutePath)
+        val graphArg = shellQuote(graphName)
+        val nodeArg = shellQuote(spec.id)
+        return RerunGuidance(
+            resumeGraphCommand = "./gradlew $graphArg --resume-from-build $buildArg --resume-from-node $nodeArg",
+            runOnlyCommand = "./gradlew $graphArg --resume-from-build $buildArg --run-only-node $nodeArg",
+            inputContextFile = relativeToReport(reportRoot, inputContextFile),
+        )
+    }
+
+    private fun addRerunGuidance(envelopeJson: String, guidance: RerunGuidance): String {
+        val trimmed = envelopeJson.trimEnd().removeSuffix("}")
+        return buildString {
+            append(trimmed)
+            appendRerunGuidance(guidance)
+            append("}\n")
+        }
+    }
+
+    private fun StringBuilder.appendRerunGuidance(guidance: RerunGuidance?) {
+        if (guidance == null) return
+        append(",\"rerunGuidance\":{")
+        append("\"resumeGraphCommand\":").append(jsonString(guidance.resumeGraphCommand))
+        append(",\"runOnlyCommand\":").append(jsonString(guidance.runOnlyCommand))
+        append(",\"inputContextFile\":").append(jsonString(guidance.inputContextFile))
+        append("}")
+    }
+
+    private fun shellQuote(value: String): String =
+        "'" + value.replace("'", "'\"'\"'") + "'"
 
     private fun jsonString(s: String): String {
         val sb = StringBuilder(s.length + 2)

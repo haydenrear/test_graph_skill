@@ -26,7 +26,21 @@ from _common import add_test_graph_root_arg, run_gradle
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Replay examples:\n"
+            "  Continue a graph from a saved node context:\n"
+            "    run.py smoke --resume-from-build build/validation-reports/<runId> "
+            "--resume-from-node login.smoke\n"
+            "  Run only one node from a saved node context:\n"
+            "    run.py smoke --resume-from-build build/validation-reports/<runId> "
+            "--run-only-node login.smoke\n\n"
+            "Use --resume-from-build with exactly one node selector. "
+            "--resume-from-node continues downstream; --run-only-node does not."
+        ),
+    )
     parser.add_argument(
         "graph",
         nargs="?",

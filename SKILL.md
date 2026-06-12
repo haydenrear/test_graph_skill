@@ -60,6 +60,7 @@ Do not blindly rerun a whole graph after every small fix. Test graph nodes are i
 When a graph fails:
 
 - Inspect the failed node's report first: `<test_graph>/build/validation-reports/<runId>/report.md`, `summary.json`, `envelope/<node-id>.json`, and any `node-logs/` entries.
+- For rerunnable failed nodes, read the report or Gradle output's rerun guidance. It includes both a resume-graph command and a run-only command backed by the node's saved input context.
 - Decide whether the failure is isolated to the failed node or invalidates upstream setup. If upstream dependencies still produced valid published context, prefer rerunning only the failed node while iterating.
 - To resume graph execution from that node and continue downstream, use `<skill>/scripts/run.py <graph> --resume-from-build <test_graph>/build/validation-reports/<runId> --resume-from-node <node-id>`. The selected node must have `rerun=true`.
 - To run only that node from its saved build context, use `<skill>/scripts/run.py <graph> --resume-from-build <test_graph>/build/validation-reports/<runId> --run-only-node <node-id>`. This writes refreshed node evidence in the same build directory without continuing downstream graph nodes.

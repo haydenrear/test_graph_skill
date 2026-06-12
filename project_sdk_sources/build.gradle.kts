@@ -69,6 +69,10 @@ validationGraph {
         node("sources/RerunJavaProbe.java")
     }
 
+    testGraph("rerunGuidance") {
+        node("sources/RerunGuidanceFailure.py")
+    }
+
     // Multiple graphs supported — each becomes its own Gradle task.
     // Uncomment to add a second graph that reuses the same scripts with
     // different DSL overlays (tighter timeouts, extra tags, extra edges):

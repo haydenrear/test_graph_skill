@@ -97,20 +97,19 @@ jobs:
         run: ./gradlew --console=plain :build-logic:test
 
       - name: Run spec pytest suite
-        run: pytest specs/current/tests specs/desired_program_model/tests
+        run: pytest specs/program_model/tests
 
-      - name: Model check current spec
-        working-directory: specs/current
-        run: java -cp "$TLA2TOOLS_JAR" tlc2.TLC -config MC.cfg TestGraph.tla
-
-      - name: Model check desired spec
-        working-directory: specs/desired_program_model
+      - name: Model check accepted program spec
+        working-directory: specs/program_model
         run: java -cp "$TLA2TOOLS_JAR" tlc2.TLC -config MC.cfg TestGraph.tla
 
       - name: Discover nested test graph
         run: |
           ./scripts/discover.py --test-graph-root test_graph
-          ./scripts/discover.py selfValidation --test-graph-root test_graph
+          ./scripts/discover.py rerunGraphJbang --test-graph-root test_graph
+          ./scripts/discover.py rerunGraphUv --test-graph-root test_graph
+          ./scripts/discover.py runOnlyJbang --test-graph-root test_graph
+          ./scripts/discover.py runOnlyUv --test-graph-root test_graph
 
       - name: Run nested test graph
         run: ./scripts/run.py --all --test-graph-root test_graph

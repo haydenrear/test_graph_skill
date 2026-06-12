@@ -159,6 +159,7 @@ internal object RunReportWriter {
               .append(inputContextPath).append("](").append(inputContextPath).append(")\n\n")
         }
 
+        renderRerunGuidance(sb, env["rerunGuidance"])
         renderAssertions(sb, env["assertions"])
         renderMetrics(sb, env["metrics"])
         renderProcesses(sb, env["processes"])
@@ -173,6 +174,27 @@ internal object RunReportWriter {
               .append(stdoutPath).append("](").append(stdoutPath).append(")\n\n")
         }
         sb.append("---\n\n")
+    }
+
+    private fun renderRerunGuidance(sb: StringBuilder, raw: Any?) {
+        val map = (raw as? Map<*, *>) ?: return
+        val resumeGraph = map["resumeGraphCommand"] as? String
+        val runOnly = map["runOnlyCommand"] as? String
+        if (resumeGraph == null && runOnly == null) return
+        sb.append("### Rerun guidance\n\n")
+        val inputContext = map["inputContextFile"] as? String
+        if (inputContext != null) {
+            sb.append("Saved input context: [`")
+              .append(inputContext).append("`](").append(inputContext).append(")\n\n")
+        }
+        if (resumeGraph != null) {
+            sb.append("Resume graph:\n\n```bash\n")
+              .append(resumeGraph).append("\n```\n\n")
+        }
+        if (runOnly != null) {
+            sb.append("Run only this node:\n\n```bash\n")
+              .append(runOnly).append("\n```\n\n")
+        }
     }
 
     @Suppress("UNCHECKED_CAST")

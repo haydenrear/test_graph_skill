@@ -15,8 +15,8 @@ from inside this `test_graph/` directory:
 
 ```bash
 <skill>/scripts/discover.py                 # list available test graphs
-<skill>/scripts/discover.py selfValidation  # dry-run plan + render docs/selfValidation.png
-<skill>/scripts/run.py selfValidation       # run the repo self-validation graph
+<skill>/scripts/discover.py rerunGraphJbang # dry-run plan + render docs/rerunGraphJbang.png
+<skill>/scripts/run.py rerunGraphJbang      # run one focused graph
 <skill>/scripts/run.py --all                # run every registered graph serially
 <skill>/scripts/clean.py                    # remove build/ outputs
 ```
@@ -27,7 +27,7 @@ debugging, but normal project work should start with the wrapper scripts.
 ## Layout
 
 ```
-build.gradle.kts      repo-local `testGraph("selfValidation") { ... }` wiring
+build.gradle.kts      repo-local rerun/resume graph wiring
 settings.gradle.kts
 gradlew, gradle/      Gradle wrapper (standalone; no global gradle needed)
 build-logic/          Gradle plugin + Kotlin DSL (ValidationGraphPlugin)
@@ -44,8 +44,8 @@ Use the upstream skill's scripts from inside this directory:
 ```bash
 <skill>/scripts/new-jbang-node.py checkout.smoke assertion
 <skill>/scripts/new-uv-node.py product.seeded fixture
-<skill>/scripts/discover.py selfValidation
-<skill>/scripts/run.py selfValidation
+<skill>/scripts/discover.py rerunGraphJbang
+<skill>/scripts/run.py rerunGraphJbang
 ```
 
 ## GitHub Actions

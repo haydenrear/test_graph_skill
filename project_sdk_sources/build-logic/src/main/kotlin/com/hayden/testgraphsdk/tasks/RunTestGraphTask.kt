@@ -91,10 +91,15 @@ abstract class RunTestGraphTask : DefaultTask() {
             )
         }
 
-        PlanExecutor(
-            ExecutorRegistry.defaults(tools),
-            projectDirectory.get(), reportDir, runId, logger,
-        ).run(plan, resume)
+        var executionFailure: Throwable? = null
+        try {
+            PlanExecutor(
+                ExecutorRegistry.defaults(tools),
+                projectDirectory.get(), reportDir, runId, logger, graphSpec.name,
+            ).run(plan, resume)
+        } catch (t: Throwable) {
+            executionFailure = t
+        }
 
         // Roll this graph's per-node envelopes into summary.json + report.md
         // right here, while we still own this run dir. Doing it inline avoids
@@ -105,9 +110,10 @@ abstract class RunTestGraphTask : DefaultTask() {
         if (RunReportWriter.writeRunReport(reportDir.asFile)) {
             logger.lifecycle(
                 "wrote ${File(reportDir.asFile, "summary.json").absolutePath} + " +
-                        "${File(reportDir.asFile, "report.md").absolutePath}"
+                "${File(reportDir.asFile, "report.md").absolutePath}"
             )
         }
+        executionFailure?.let { throw it }
 
         logger.lifecycle("testGraph '${graphSpec.name}' done. reports: ${reportDir.asFile.absolutePath}")
     }

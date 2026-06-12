@@ -224,6 +224,10 @@ The node must have `rerun=true` in its script metadata, and its saved
 executor skips earlier plan steps, runs the selected node, continues through the
 remaining graph plan, and rewrites the report in the same build directory.
 
+When a rerunnable node fails, Gradle output and `report.md` include rerun guidance
+with both this resume-graph command and the run-only command below.
+Nodes declared with `rerun(false)` do not emit those commands.
+
 ### Run only one node from a saved build
 
 When you want to debug one node without replaying upstream setup or continuing

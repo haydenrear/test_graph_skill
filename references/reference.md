@@ -198,6 +198,22 @@ from the selected node through the rest of the graph. Run-only mode executes
 only the selected node. Both modes write refreshed envelope and report files
 back into the same build directory.
 
+When a rerunnable node finishes with `failed` or `errored`, the canonical
+envelope may include a `rerunGuidance` object:
+
+```json
+{
+  "rerunGuidance": {
+    "resumeGraphCommand": "./gradlew smoke --resume-from-build '/path/to/build/validation-reports/<runId>' --resume-from-node 'login.smoke'",
+    "runOnlyCommand": "./gradlew smoke --resume-from-build '/path/to/build/validation-reports/<runId>' --run-only-node 'login.smoke'",
+    "inputContextFile": "context/login.smoke.input.json"
+  }
+}
+```
+
+`report.md` renders the same commands under **Rerun guidance**. Nodes with
+`rerun(false)` suppress this guidance even when they fail.
+
 Wrapper forms:
 
 ```bash
