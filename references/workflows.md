@@ -224,6 +224,22 @@ The node must have `rerun=true` in its script metadata, and its saved
 executor skips earlier plan steps, runs the selected node, continues through the
 remaining graph plan, and rewrites the report in the same build directory.
 
+### Run only one node from a saved build
+
+When you want to debug one node without replaying upstream setup or continuing
+downstream graph nodes, run only the selected node from its saved input context:
+
+```bash
+<skill>/scripts/run.py <graph> \
+  --resume-from-build <test_graph>/build/validation-reports/<runId> \
+  --run-only-node <node-id>
+```
+
+The selected node must have `rerun=true`, must be in the graph plan, and must
+have a saved `context/<node-id>.input.json` in the build directory. The executor
+runs only that node, writes refreshed envelope/report evidence in the same build
+directory, and leaves downstream graph nodes unexecuted for that invocation.
+
 ### Rerun only the failing node while debugging
 
 Do not automatically rerun the whole graph after every small fix. If a late node

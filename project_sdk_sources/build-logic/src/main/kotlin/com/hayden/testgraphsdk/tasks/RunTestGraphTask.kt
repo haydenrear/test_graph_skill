@@ -39,6 +39,7 @@ abstract class RunTestGraphTask : DefaultTask() {
     @get:Internal abstract val reportRoot: DirectoryProperty
     @get:Internal var resumeFromBuildPath: String? = null
     @get:Internal var resumeFromNodeId: String? = null
+    @get:Internal var runOnlyNodeId: String? = null
 
     init {
         group = "validation"
@@ -59,6 +60,14 @@ abstract class RunTestGraphTask : DefaultTask() {
     )
     fun setResumeFromNode(nodeId: String) {
         resumeFromNodeId = nodeId
+    }
+
+    @Option(
+        option = "run-only-node",
+        description = "Node id to run by itself from saved build input context.",
+    )
+    fun setRunOnlyNode(nodeId: String) {
+        runOnlyNodeId = nodeId
     }
 
     @TaskAction
@@ -105,13 +114,20 @@ abstract class RunTestGraphTask : DefaultTask() {
 
     private fun resumeRequest(): PlanExecutor.ResumeFromBuild? {
         val buildPath = resumeFromBuildPath
-        val nodeId = resumeFromNodeId
-        if ((buildPath == null) != (nodeId == null)) {
+        val resumeNode = resumeFromNodeId
+        val runOnlyNode = runOnlyNodeId
+        val replayNodeCount = listOf(resumeNode, runOnlyNode).count { it != null }
+        if (buildPath == null && replayNodeCount > 0) {
             throw IllegalArgumentException(
-                "--resume-from-build and --resume-from-node must be provided together"
+                "--resume-from-build is required with --resume-from-node or --run-only-node"
             )
         }
-        if (buildPath == null || nodeId == null) return null
+        if (buildPath != null && replayNodeCount != 1) {
+            throw IllegalArgumentException(
+                "--resume-from-build requires exactly one of --resume-from-node or --run-only-node"
+            )
+        }
+        if (buildPath == null) return null
 
         val buildDir = File(buildPath).let {
             if (it.isAbsolute) it else File(project.projectDir, buildPath)
@@ -121,6 +137,15 @@ abstract class RunTestGraphTask : DefaultTask() {
                 "--resume-from-build must point at an existing run directory: ${buildDir.absolutePath}"
             )
         }
-        return PlanExecutor.ResumeFromBuild(buildDir = buildDir, nodeId = nodeId)
+        val mode = if (runOnlyNode != null) {
+            PlanExecutor.BuildReplayMode.RUN_ONLY_NODE
+        } else {
+            PlanExecutor.BuildReplayMode.RESUME_GRAPH
+        }
+        return PlanExecutor.ResumeFromBuild(
+            buildDir = buildDir,
+            nodeId = resumeNode ?: runOnlyNode!!,
+            mode = mode,
+        )
     }
 }

@@ -14,6 +14,7 @@ from inside this `test_graph/` directory:
 <skill>/scripts/run.py smoke                # run one graph
 <skill>/scripts/run.py --all                # run every registered graph serially
 <skill>/scripts/run.py smoke --resume-from-build build/validation-reports/<runId> --resume-from-node login.smoke
+<skill>/scripts/run.py smoke --resume-from-build build/validation-reports/<runId> --run-only-node login.smoke
 <skill>/scripts/clean.py                    # remove build/ outputs
 ```
 

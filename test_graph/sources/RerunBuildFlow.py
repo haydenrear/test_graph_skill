@@ -120,6 +120,32 @@ def main(ctx):
                 "context.snapshots.present",
             ],
         )
+        run_only_login = _run(
+            "run only login.smoke",
+            [
+                str(REPO_ROOT / "scripts/run.py"),
+                "smoke",
+                "--test-graph-root",
+                str(PROJECT_GRAPH_ROOT),
+                "--resume-from-build",
+                str(smoke_build),
+                "--run-only-node",
+                "login.smoke",
+            ],
+        )
+        run_only_context = _run(
+            "run only context.snapshots.present",
+            [
+                str(REPO_ROOT / "scripts/run.py"),
+                "smoke",
+                "--test-graph-root",
+                str(PROJECT_GRAPH_ROOT),
+                "--resume-from-build",
+                str(smoke_build),
+                "--run-only-node",
+                "context.snapshots.present",
+            ],
+        )
         resume_disabled = _run(
             "reject rerun.disabled.probe",
             [
@@ -133,6 +159,22 @@ def main(ctx):
                 "rerun.disabled.probe",
             ],
         )
+        run_only_disabled = _run(
+            "reject run-only rerun.disabled.probe",
+            [
+                str(REPO_ROOT / "scripts/run.py"),
+                "smoke",
+                "--test-graph-root",
+                str(PROJECT_GRAPH_ROOT),
+                "--resume-from-build",
+                str(smoke_build),
+                "--run-only-node",
+                "rerun.disabled.probe",
+            ],
+        )
+
+        run_only_login_output = run_only_login.stdout + run_only_login.stderr
+        run_only_context_output = run_only_context.stdout + run_only_context.stderr
 
         result = (
             NodeResult.pass_(ctx.node_id)
@@ -143,16 +185,36 @@ def main(ctx):
             .assertion("smoke_build_dir_exists", smoke_build.is_dir())
             .assertion("resume_login_continued_downstream", resume_login.returncode == 0)
             .assertion("resume_context_final_node_passed", resume_context.returncode == 0)
+            .assertion("run_only_login_jbang_passed", run_only_login.returncode == 0)
+            .assertion("run_only_context_uv_passed", run_only_context.returncode == 0)
+            .assertion(
+                "run_only_does_not_continue_downstream",
+                "  [1/1] login.smoke" in run_only_login_output
+                and "  [2/" not in run_only_login_output,
+            )
+            .assertion(
+                "run_only_context_was_single_step",
+                "  [1/1] context.snapshots.present" in run_only_context_output
+                and "  [2/" not in run_only_context_output,
+            )
             .assertion("rerun_false_selection_rejected", resume_disabled.returncode != 0)
             .assertion(
                 "rerun_false_rejection_explained",
                 "rerun=false" in (resume_disabled.stdout + resume_disabled.stderr),
             )
+            .assertion("run_only_rerun_false_rejected", run_only_disabled.returncode != 0)
+            .assertion(
+                "run_only_rerun_false_rejection_explained",
+                "rerun=false" in (run_only_disabled.stdout + run_only_disabled.stderr),
+            )
             .metric("projectGraphCount", len(run_ids))
             .log(_summarize("run_all", run_all))
             .log(_summarize("resume_login", resume_login))
             .log(_summarize("resume_context", resume_context))
+            .log(_summarize("run_only_login", run_only_login))
+            .log(_summarize("run_only_context", run_only_context))
             .log(_summarize("resume_disabled", resume_disabled))
+            .log(_summarize("run_only_disabled", run_only_disabled))
             .publish("smokeRunId", smoke_run_id)
             .publish("rerunSmokeUvRunId", run_ids.get("rerunSmokeUv", ""))
             .publish("rerunSmokeJavaRunId", run_ids.get("rerunSmokeJava", ""))

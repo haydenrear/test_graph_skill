@@ -14,6 +14,7 @@ Usage:
     run.py <graph-name>           # single graph (e.g. run.py smoke)
     run.py --all                  # every registered graph, serial
     run.py smoke --resume-from-build build/validation-reports/<runId> --resume-from-node login.smoke
+    run.py smoke --resume-from-build build/validation-reports/<runId> --run-only-node login.smoke
 """
 from __future__ import annotations
 
@@ -43,12 +44,19 @@ def main() -> int:
         "--resume-from-build",
         help="Existing build/validation-reports/<runId> directory whose saved "
              "context/<node-id>.input.json should seed resumed execution. "
-             "Requires <graph> and --resume-from-node.",
+             "Requires <graph> and exactly one of --resume-from-node or "
+             "--run-only-node.",
     )
     parser.add_argument(
         "--resume-from-node",
         help="Node id to resume from. The selected node's saved input context "
              "must exist under --resume-from-build/context/.",
+    )
+    parser.add_argument(
+        "--run-only-node",
+        help="Node id to run by itself from --resume-from-build. The selected "
+             "node's saved input context must exist under "
+             "--resume-from-build/context/.",
     )
     add_test_graph_root_arg(parser)
     args = parser.parse_args()
@@ -57,10 +65,16 @@ def main() -> int:
         parser.error("cannot pass both <graph> and --all — pick one")
     if not args.run_all and not args.graph:
         parser.error("either <graph> or --all is required")
-    if args.run_all and (args.resume_from_build or args.resume_from_node):
+    replay_node_count = sum(bool(v) for v in (args.resume_from_node, args.run_only_node))
+    if args.run_all and (args.resume_from_build or replay_node_count):
         parser.error("resume options apply to one graph; pass <graph> instead of --all")
-    if bool(args.resume_from_build) != bool(args.resume_from_node):
-        parser.error("--resume-from-build and --resume-from-node must be provided together")
+    if args.resume_from_build and replay_node_count != 1:
+        parser.error(
+            "--resume-from-build requires exactly one of --resume-from-node "
+            "or --run-only-node"
+        )
+    if not args.resume_from_build and replay_node_count:
+        parser.error("--resume-from-build is required with --resume-from-node or --run-only-node")
 
     if args.run_all:
         # Each RunTestGraphTask now writes its own summary.json +
@@ -77,8 +91,11 @@ def main() -> int:
         resume_from_build = str(Path(args.resume_from_build).expanduser().resolve())
         gradle_args += [
             f"--resume-from-build={resume_from_build}",
-            f"--resume-from-node={args.resume_from_node}",
         ]
+        if args.resume_from_node:
+            gradle_args.append(f"--resume-from-node={args.resume_from_node}")
+        if args.run_only_node:
+            gradle_args.append(f"--run-only-node={args.run_only_node}")
     return run_gradle(gradle_args, args.test_graph_root)
 
 

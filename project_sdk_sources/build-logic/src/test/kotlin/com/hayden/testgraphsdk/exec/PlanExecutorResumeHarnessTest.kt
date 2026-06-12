@@ -34,4 +34,9 @@ class PlanExecutorResumeHarnessTest {
     @Test
     fun resumeRejectsSelectedRerunDisabledNode() {
     }
+
+    @Ignore("Harness placeholder for validating single-node replay from saved build context.")
+    @Test
+    fun runOnlyNodeExecutesSelectedNodeWithoutDownstreamContinuation() {
+    }
 }

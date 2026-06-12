@@ -33,9 +33,15 @@ class PlanExecutor(
     private val runId: String,
     private val logger: Logger,
 ) {
+    enum class BuildReplayMode {
+        RESUME_GRAPH,
+        RUN_ONLY_NODE,
+    }
+
     data class ResumeFromBuild(
         val buildDir: File,
         val nodeId: String,
+        val mode: BuildReplayMode = BuildReplayMode.RESUME_GRAPH,
     )
 
     fun run(
@@ -174,11 +180,22 @@ class PlanExecutor(
             )
         }
 
-        logger.lifecycle(
-            "resuming '${resumeSpec.id}' from ${resumeFromBuild.buildDir.absolutePath}; " +
-                    "skipping ${resumeIndex} already-passed dependency step(s)"
-        )
-        return ResumeState(plan.drop(resumeIndex), initialContext, true)
+        return when (resumeFromBuild.mode) {
+            BuildReplayMode.RESUME_GRAPH -> {
+                logger.lifecycle(
+                    "resuming '${resumeSpec.id}' from ${resumeFromBuild.buildDir.absolutePath}; " +
+                            "skipping ${resumeIndex} already-passed dependency step(s)"
+                )
+                ResumeState(plan.drop(resumeIndex), initialContext, true)
+            }
+            BuildReplayMode.RUN_ONLY_NODE -> {
+                logger.lifecycle(
+                    "running only '${resumeSpec.id}' from ${resumeFromBuild.buildDir.absolutePath}; " +
+                            "not continuing downstream graph nodes"
+                )
+                ResumeState(listOf(resumeSpec), initialContext, true)
+            }
+        }
     }
 
     private fun readContextItem(nodeId: String): ContextItem {

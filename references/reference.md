@@ -187,20 +187,27 @@ Graph tasks accept resume options for a single graph:
 | Option | Purpose |
 | --- | --- |
 | `--resume-from-build=<dir>` | Existing `build/validation-reports/<runId>` directory containing saved input contexts. |
-| `--resume-from-node=<node-id>` | Node id whose `context/<node-id>.input.json` seeds the resumed run. |
+| `--resume-from-node=<node-id>` | Node id whose `context/<node-id>.input.json` seeds a resumed run that continues downstream. |
+| `--run-only-node=<node-id>` | Node id whose `context/<node-id>.input.json` seeds a single-node replay that does not continue downstream. |
 
-Use both options together. The selected node must be in the graph plan, must
-have `rerun=true`, and its saved input context must contain all of its declared
-dependencies. The executor skips earlier plan steps and continues from the
-selected node through the rest of the graph, writing refreshed envelopes and
-report files back into the same build directory.
+Use `--resume-from-build` with exactly one node selector:
+`--resume-from-node` or `--run-only-node`. The selected node must be in the
+graph plan, must have `rerun=true`, and its saved input context must contain all
+of its declared dependencies. Resume mode skips earlier plan steps and continues
+from the selected node through the rest of the graph. Run-only mode executes
+only the selected node. Both modes write refreshed envelope and report files
+back into the same build directory.
 
-Wrapper form:
+Wrapper forms:
 
 ```bash
 <skill>/scripts/run.py smoke \
   --resume-from-build <test_graph>/build/validation-reports/<runId> \
   --resume-from-node login.smoke
+
+<skill>/scripts/run.py smoke \
+  --resume-from-build <test_graph>/build/validation-reports/<runId> \
+  --run-only-node login.smoke
 ```
 
 ## Unified result envelope
