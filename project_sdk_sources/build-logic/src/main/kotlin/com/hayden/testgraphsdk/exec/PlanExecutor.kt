@@ -54,6 +54,7 @@ class PlanExecutor(
         val cumulative = resumeState.initialContext.toMutableList()
         val executionPlan = resumeState.executionPlan
         executionPlan.forEach { it.sideEffectSpecs() }
+        val provisioningState = ProvisioningState(projectDir.asFile, graphName, runId)
 
         // .tmp-results/ holds the SDK's raw NodeResult JSON before we
         // post-process it. node-logs/ holds the merged stdout+stderr
@@ -77,6 +78,7 @@ class PlanExecutor(
             val stdoutLog = File(nodeLogsDir, "${spec.id}.stdout.log")
             val timeoutMillis = TimeoutParser.parseMillis(spec.timeout)
             val maxAttempts = spec.retries + 1
+            val preparedProvisioning = provisioningState.prepare(spec)
 
             var execOutcome: ExecutionOutcome = ExecutionOutcome.TimedOut
             var startedAt = Instant.now()
@@ -102,6 +104,7 @@ class PlanExecutor(
                     contextArg = contextArg,
                     resultOut = resultOut,
                     stdoutLog = stdoutLog,
+                    environment = preparedProvisioning?.environment ?: emptyMap(),
                     timeoutMillis = timeoutMillis,
                 )
 
@@ -140,7 +143,12 @@ class PlanExecutor(
                 logger.lifecycle("  run only: ${rerunGuidance.runOnlyCommand}")
                 addRerunGuidance(outcome.envelopeJson, rerunGuidance)
             }
-            envelope.writeText(envelopeJson)
+            val provisioningRecord = provisioningState.recordSuccessful(
+                spec = spec,
+                prepared = preparedProvisioning,
+                status = outcome.status,
+            )
+            envelope.writeText(addProvisioningState(envelopeJson, provisioningRecord, reportRoot))
 
             cumulative += readContextItem(spec.id)
 
@@ -408,6 +416,38 @@ class PlanExecutor(
         }
     }
 
+    private fun addProvisioningState(
+        envelopeJson: String,
+        record: ProvisioningStateRecord?,
+        reportRoot: File,
+    ): String {
+        if (record == null) return envelopeJson
+        val trimmed = envelopeJson.trimEnd().removeSuffix("}")
+        return buildString {
+            append(trimmed)
+            append(",\"provisioningState\":{")
+            append("\"environmentId\":").append(jsonString(record.identity.id))
+            append(",\"branch\":").append(jsonString(record.identity.branch))
+            append(",\"target\":").append(jsonString(record.identity.target))
+            append(",\"backend\":").append(jsonString(record.identity.backend))
+            append(",\"actions\":")
+            appendJsonArray(record.actions)
+            record.provisionedMarker?.let {
+                append(",\"provisionedMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
+            }
+            record.resetMarker?.let {
+                append(",\"resetMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
+            }
+            record.destroyRequestMarker?.let {
+                append(",\"destroyRequestMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
+            }
+            record.destroyedMarker?.let {
+                append(",\"destroyedMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
+            }
+            append("}}\n")
+        }
+    }
+
     private fun StringBuilder.appendRerunGuidance(guidance: RerunGuidance?) {
         if (guidance == null) return
         append(",\"rerunGuidance\":{")
@@ -415,6 +455,15 @@ class PlanExecutor(
         append(",\"runOnlyCommand\":").append(jsonString(guidance.runOnlyCommand))
         append(",\"inputContextFile\":").append(jsonString(guidance.inputContextFile))
         append("}")
+    }
+
+    private fun StringBuilder.appendJsonArray(values: Iterable<String>) {
+        append("[")
+        values.forEachIndexed { index, value ->
+            if (index > 0) append(",")
+            append(jsonString(value))
+        }
+        append("]")
     }
 
     private fun shellQuote(value: String): String =

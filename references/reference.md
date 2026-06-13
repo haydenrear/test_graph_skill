@@ -106,9 +106,27 @@ Current registered forms:
 | `environment:reset` | Declares reset for redeploy without cluster destruction. |
 | `environment:destroy` | Declares explicit merge-gated environment destruction. |
 
-TG-5A only validates and carries this metadata. The `env:[...]` and
-`environment:*` forms do not perform propagation, provisioning, reset, deploy,
-or destroy until later TG-5 tickets implement those effects.
+TG-5A only validates and carries this metadata. TG-5B adds framework-managed
+marker files for `environment:provision`, `environment:reset`, and
+`environment:destroy`. This still does not run an environment repository,
+OpenTofu, downstream env propagation, deployment, or cleanup beyond marker
+state.
+
+Marker state lives under `build/testgraph-provisioning-state/`:
+
+| Directory | Meaning |
+| --- | --- |
+| `provisioned/<environment-id>.json` | A node with `environment:provision` passed and the branch environment is considered active. |
+| `reset/<environment-id>__<run-node>.json` | A reset was requested for redeploy; the provisioned marker remains in place. |
+| `destroy-requested/<environment-id>__<run-node>.json` | A destroy node had explicit destroy authorization. |
+| `destroyed/<environment-id>.json` | An authorized destroy node passed and the provisioned marker was removed. |
+
+Environment ids are branch-scoped:
+`<graph>__<branch>__<target>__<backend>`. The executor derives branch from
+`TEST_GRAPH_FEATURE_BRANCH`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, then
+`local`. Target defaults to `local-preview`; backend defaults to `local`.
+Destroy is refused before node execution unless
+`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
 
 ## Gradle DSL
 

@@ -20,4 +20,9 @@ validationGraph {
     testGraph("runOnlyUv") {
         node("sources/RunOnlyUv.py")
     }
+
+    testGraph("branchEnvironmentWorkflow") {
+        node("sources/BranchEnvironmentMarkersPresent.py")
+        node("sources/Tg5FutureWorkflowPlan.py")
+    }
 }

@@ -17,6 +17,11 @@ SDK surface.
 - Side effects are a typed registry such as `browser`, `net:local`,
   `process:gradle`, `env:[KEY]`, and `environment:provision`; invalid forms
   fail during describe/plan validation before node execution starts.
+- Branch-environment marker state lives under
+  `build/testgraph-provisioning-state/`. Provision and reset markers are
+  written only after successful nodes. Destroy requires
+  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` and removes the provisioned
+  marker only after the destroy node passes.
 - Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
   guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching
