@@ -58,7 +58,7 @@ service_catalog:
 tickets:
   - id: TG-5A
     title: "Add SDK side-effect runtime foundation"
-    status: next
+    status: implemented
     depends_on: []
     objective: >
       Add typed SDK handling for node side effects so preview/environment
@@ -93,11 +93,15 @@ tickets:
         - Side effects are represented as typed metadata and loaded into the execution plan.
         - Unsupported or malformed side effects fail before execution side effects occur.
         - No environment repository or OpenTofu behavior is implemented in this ticket.
-      evidence: []
+      evidence:
+        - cd specs/current && tlc2 -config MC.cfg TestGraph.tla
+        - pytest specs/current/tests specs/desired_program_model/tests
+        - cd project_sdk_sources && ./gradlew --console=plain :build-logic:test
+        - cd project_sdk_sources && ./gradlew --console=plain :sdk:java:compileJava
 
   - id: TG-5B
     title: "Add provisioning state markers and lifecycle guardrails"
-    status: pending
+    status: next
     depends_on:
       - TG-5A
     objective: >

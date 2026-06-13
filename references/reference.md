@@ -22,7 +22,7 @@ emitted JSON; no YAML sidecar.
 | `retries`      | integer                                                                     | no       | Extra executor attempts after timeouts only. Default: 0.       |
 | `rerun`        | boolean                                                                     | no       | Default: true. Controls whether failed-run guidance should offer direct rerun from saved input context. |
 | `cacheable`    | boolean                                                                     | no       | Default: false. Only true if the node is a pure function of its inputs. |
-| `sideEffects`  | list\<string\>                                                              | no       | Free-form: `browser`, `db:writes`, `fs:tmp`, `net:external`.   |
+| `sideEffects`  | list\<string\>                                                              | no       | Typed registry; see side effects below.                        |
 | `inputs`       | map\<string, type\>                                                         | no       | Typed inputs the node reads from context.                      |
 | `outputs`      | map\<string, type\>                                                         | no       | Typed outputs the node produces in its envelope.               |
 | `reports`      | object                                                                      | no       | See below.                                                     |
@@ -40,6 +40,7 @@ NodeSpec.of("login.smoke")
     .rerun(false)
     .cacheable(false)
     .sideEffects("browser")
+    .sideEffect(SideEffect.env("KUBECONFIG"))
     .input("baseUrl", "string")
     .output("success", "boolean")
     .junitXml()
@@ -57,6 +58,7 @@ NodeSpec("login.smoke") \
     .rerun(False) \
     .cacheable(False) \
     .side_effects("browser") \
+    .side_effects(SideEffect.env("KUBECONFIG")) \
     .input("baseUrl", "string") \
     .output("success", "boolean") \
     .junit_xml() \
@@ -78,6 +80,35 @@ Use `rerun(false)` only when replaying the node from the previous
 external mutations, one-shot tokens, claimed ports, or resources that cannot be
 reconstructed from the saved context. This is independent of `retries(...)`,
 which controls automatic retry after executor timeouts.
+
+### Side effects
+
+`sideEffects` are a typed registry, not arbitrary labels. The Java and Python
+SDKs validate them in describe mode, the Gradle DSL validates overlays, and the
+executor validates the loaded plan before starting any node subprocess. This
+keeps effectful graph behavior auditable and fail-fast.
+
+Current registered forms:
+
+| Form | Meaning |
+| --- | --- |
+| `browser` | Uses a browser or browser-like UI automation surface. |
+| `db:writes` | Writes database or durable fixture state. |
+| `fs:tmp` | Writes temporary filesystem state. |
+| `net:external` | Calls an external network service. |
+| `net:local` | Calls a local service or local cluster endpoint. |
+| `process:gradle` | Spawns Gradle or nested test-graph processes. |
+| `env:[KEY]` | Requests propagation of one context key as a downstream environment variable. |
+| `env:[*]` | Requests propagation of all eligible returned context keys. |
+| `environment:provision` | Declares a branch environment provisioning effect. |
+| `environment:reuse` | Declares reuse of an existing branch environment. |
+| `environment:deploy` | Declares application deployment into a branch environment. |
+| `environment:reset` | Declares reset for redeploy without cluster destruction. |
+| `environment:destroy` | Declares explicit merge-gated environment destruction. |
+
+TG-5A only validates and carries this metadata. The `env:[...]` and
+`environment:*` forms do not perform propagation, provisioning, reset, deploy,
+or destroy until later TG-5 tickets implement those effects.
 
 ## Gradle DSL
 

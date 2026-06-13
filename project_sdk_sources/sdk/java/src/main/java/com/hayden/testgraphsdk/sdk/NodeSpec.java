@@ -73,7 +73,15 @@ public final class NodeSpec {
      */
     public NodeSpec rerun(boolean enabled)           { this.rerun = enabled; return this; }
     public NodeSpec cacheable(boolean b)             { this.cacheable = b; return this; }
-    public NodeSpec sideEffects(String... s)         { sideEffects.addAll(Arrays.asList(s)); return this; }
+    public NodeSpec sideEffects(String... s) {
+        for (String raw : s) sideEffects.add(SideEffect.of(raw).raw());
+        return this;
+    }
+    public NodeSpec sideEffects(SideEffect... s) {
+        for (SideEffect effect : s) sideEffects.add(effect.raw());
+        return this;
+    }
+    public NodeSpec sideEffect(SideEffect effect)    { sideEffects.add(effect.raw()); return this; }
     public NodeSpec input(String name, String type)  { inputs.put(name, type); return this; }
     public NodeSpec output(String name, String type) { outputs.put(name, type); return this; }
     public NodeSpec junitXml()                       { this.reportJunitXml = true; return this; }

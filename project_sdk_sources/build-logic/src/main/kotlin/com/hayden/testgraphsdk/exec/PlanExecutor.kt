@@ -53,6 +53,7 @@ class PlanExecutor(
         val resumeState = prepareResume(plan, resumeFromBuild)
         val cumulative = resumeState.initialContext.toMutableList()
         val executionPlan = resumeState.executionPlan
+        executionPlan.forEach { it.sideEffectSpecs() }
 
         // .tmp-results/ holds the SDK's raw NodeResult JSON before we
         // post-process it. node-logs/ holds the merged stdout+stderr

@@ -2,10 +2,106 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 
 VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"}
+_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_ALLOWED_SIDE_EFFECTS = {
+    "db": {"writes"},
+    "fs": {"tmp"},
+    "net": {"external", "local"},
+    "process": {"gradle"},
+    "environment": {"provision", "reuse", "deploy", "reset", "destroy"},
+}
+
+
+@dataclass(frozen=True)
+class SideEffect:
+    """Typed side-effect metadata for ``NodeSpec``.
+
+    Later execution tickets attach behavior to selected forms; this class only
+    validates and serializes the declared contract.
+    """
+
+    raw: str
+
+    @classmethod
+    def of(cls, raw: str) -> "SideEffect":
+        value = str(raw).strip()
+        if not value:
+            raise ValueError("side_effects contains a blank side effect")
+        if value == "browser":
+            return cls(value)
+
+        if ":" not in value:
+            raise ValueError(
+                f"malformed side effect {raw!r}; expected a registered form like "
+                "browser, net:local, or env:[KEY]"
+            )
+        family, action = value.split(":", 1)
+        if not family or not action:
+            raise ValueError(
+                f"malformed side effect {raw!r}; expected a registered form like "
+                "browser, net:local, or env:[KEY]"
+            )
+        if family == "env":
+            _validate_env_action(action, raw)
+            return cls(value)
+
+        allowed = _ALLOWED_SIDE_EFFECTS.get(family)
+        if allowed is None or action not in allowed:
+            raise ValueError(f"unsupported side effect {raw!r}")
+        return cls(value)
+
+    @classmethod
+    def browser(cls) -> "SideEffect":
+        return cls.of("browser")
+
+    @classmethod
+    def db_writes(cls) -> "SideEffect":
+        return cls.of("db:writes")
+
+    @classmethod
+    def fs_tmp(cls) -> "SideEffect":
+        return cls.of("fs:tmp")
+
+    @classmethod
+    def net_external(cls) -> "SideEffect":
+        return cls.of("net:external")
+
+    @classmethod
+    def net_local(cls) -> "SideEffect":
+        return cls.of("net:local")
+
+    @classmethod
+    def process_gradle(cls) -> "SideEffect":
+        return cls.of("process:gradle")
+
+    @classmethod
+    def env(cls, key: str) -> "SideEffect":
+        if not isinstance(key, str):
+            raise ValueError("env side effect key must be a string")
+        return cls.of(f"env:[{key}]")
+
+    @classmethod
+    def env_all(cls) -> "SideEffect":
+        return cls.of("env:[*]")
+
+    @classmethod
+    def environment(cls, action: str) -> "SideEffect":
+        if not isinstance(action, str):
+            raise ValueError("environment side effect action must be a string")
+        return cls.of(f"environment:{action.lower()}")
+
+
+def _validate_env_action(action: str, raw: str) -> None:
+    if not action.startswith("[") or not action.endswith("]"):
+        raise ValueError(f"malformed env side effect {raw!r}; expected env:[KEY] or env:[*]")
+    key = action[1:-1]
+    if key != "*" and _ENV_KEY.fullmatch(key) is None:
+        raise ValueError(f"malformed env side effect {raw!r}; expected env:[KEY] or env:[*]")
 
 
 @dataclass
@@ -79,8 +175,10 @@ class NodeSpec:
         self._cacheable = b
         return self
 
-    def side_effects(self, *s: str) -> "NodeSpec":
-        self._side_effects.extend(s)
+    def side_effects(self, *s: str | SideEffect) -> "NodeSpec":
+        for raw in s:
+            effect = raw if isinstance(raw, SideEffect) else SideEffect.of(raw)
+            self._side_effects.append(effect.raw)
         return self
 
     def input(self, name: str, type_: str = "string") -> "NodeSpec":

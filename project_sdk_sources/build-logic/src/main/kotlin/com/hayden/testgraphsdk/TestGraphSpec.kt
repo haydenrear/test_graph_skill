@@ -26,7 +26,10 @@ class NodeOverlay(internal val file: File) {
 
     fun dependsOn(vararg ids: String): NodeOverlay { extraDependsOn.addAll(ids); return this }
     fun tags(vararg t: String): NodeOverlay { extraTags.addAll(t); return this }
-    fun sideEffects(vararg s: String): NodeOverlay { extraSideEffects.addAll(s); return this }
+    fun sideEffects(vararg s: String): NodeOverlay {
+        extraSideEffects.addAll(s.map { SideEffectSpec.parse(it, "DSL sideEffects").raw })
+        return this
+    }
     fun timeout(v: String): NodeOverlay { timeoutOverride = v; return this }
     fun retries(n: Int): NodeOverlay { retriesOverride = n.coerceAtLeast(0); return this }
     fun cacheable(b: Boolean): NodeOverlay { cacheableOverride = b; return this }

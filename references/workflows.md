@@ -14,6 +14,9 @@ SDK surface.
   `build.gradle.kts` via `testGraph("name") { ... }`.
 - The DSL can add overlays with `.dependsOn(...)`, `.tags(...)`,
   `.timeout(...)`, `.cacheable(...)`, and `.sideEffects(...)`.
+- Side effects are a typed registry such as `browser`, `net:local`,
+  `process:gradle`, `env:[KEY]`, and `environment:provision`; invalid forms
+  fail during describe/plan validation before node execution starts.
 - Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
   guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching

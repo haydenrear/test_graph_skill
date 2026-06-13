@@ -1,10 +1,10 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Desired whole-program model for TG-3. The accepted baseline already models
+\* Current whole-program model for TG-5A. The accepted baseline already models
 \* graph definition, dependency resolution, node execution, published context,
-\* and reports. TG-3 adds build-directory input context snapshots plus
-\* explicit resume and single-node rerun semantics.
+\* reports, and build-directory rerun semantics. TG-5A adds SDK side-effect
+\* runtime metadata validation without provisioning or environment repositories.
 
 CONSTANTS
   Graphs,
@@ -36,6 +36,7 @@ VARIABLES
   single_node_reruns,
   run_reports,
   package_catalog,
+  side_effect_runtime_configured,
   result
 
 vars ==
@@ -43,11 +44,15 @@ vars ==
      dsl_deps, overlays, resolved_nodes, planned_graphs, plan_docs,
      active_graphs, passed_nodes, terminal_nodes, envelopes, context_items,
      input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
-     single_node_reruns, run_reports, package_catalog, result >>
+     single_node_reruns, run_reports, package_catalog,
+     side_effect_runtime_configured, result >>
 
 resumption_vars ==
   << input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
      single_node_reruns >>
+
+side_effect_vars ==
+  << side_effect_runtime_configured >>
 
 AvailableFor(g) ==
   SourceNodes
@@ -109,6 +114,7 @@ Init ==
   /\ single_node_reruns = [g \in Graphs |-> {}]
   /\ run_reports = {}
   /\ package_catalog = {}
+  /\ side_effect_runtime_configured = {}
   /\ result = [accepted |-> TRUE, reason |-> NoReason]
 
 \* @command ScaffoldProject
@@ -124,6 +130,7 @@ ScaffoldProject ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command RegisterGraph
 \* @result WorkflowResult
@@ -140,6 +147,7 @@ RegisterGraph(g) ==
                   passed_nodes, terminal_nodes, envelopes, context_items,
                   run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command AddExplicitNode
 \* @result WorkflowResult
@@ -156,6 +164,7 @@ AddExplicitNode(g, n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command AddScriptDependency
 \* @result WorkflowResult
@@ -173,6 +182,7 @@ AddScriptDependency(n, d) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command DescribeNode
 \* @result WorkflowResult
@@ -187,6 +197,7 @@ DescribeNode(n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command SetNodeRerunDisabled
 \* @result WorkflowResult
@@ -202,7 +213,8 @@ SetNodeRerunDisabled(n) ==
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, input_contexts,
                   rerun_guidance, resumed_nodes, single_node_reruns,
-                  run_reports, package_catalog >>
+                  run_reports, package_catalog,
+                  side_effect_runtime_configured >>
 
 \* @command ApplyDslOverlay
 \* @result WorkflowResult
@@ -222,6 +234,7 @@ ApplyDslOverlay(g, n, d) ==
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command ResolveNode
 \* @result WorkflowResult
@@ -242,6 +255,7 @@ ResolveNode(g, n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command PlanGraph
 \* @result WorkflowResult
@@ -262,6 +276,7 @@ PlanGraph(g) ==
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command StartRun
 \* @result WorkflowResult
@@ -285,6 +300,7 @@ StartRun(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, package_catalog,
                   rerunnable_nodes >>
+  /\ UNCHANGED side_effect_vars
 
 \* @command ResumeRunFromBuild
 \* @result WorkflowResult
@@ -306,6 +322,7 @@ ResumeRunFromBuild(g, n) ==
                   envelopes, context_items, input_contexts,
                   rerunnable_nodes, rerun_guidance, single_node_reruns,
                   run_reports, package_catalog >>
+  /\ UNCHANGED side_effect_vars
 
 \* @command RunOnlyNodeFromBuild
 \* @result NodeRunResult
@@ -327,6 +344,7 @@ RunOnlyNodeFromBuild(g, n) ==
                   terminal_nodes, context_items, input_contexts,
                   rerunnable_nodes, resumed_nodes, run_reports,
                   package_catalog >>
+  /\ UNCHANGED side_effect_vars
 
 \* @command RunNodePass
 \* @result NodeRunResult
@@ -351,6 +369,7 @@ RunNodePass(g, n) ==
                   planned_graphs, plan_docs, active_graphs, run_reports,
                   package_catalog, rerunnable_nodes, resumed_nodes,
                   single_node_reruns >>
+  /\ UNCHANGED side_effect_vars
 
 \* @command RunNodeTerminal
 \* @result NodeRunResult
@@ -376,6 +395,7 @@ RunNodeTerminal(g, n) ==
                   planned_graphs, plan_docs, passed_nodes, context_items,
                   run_reports, package_catalog, rerunnable_nodes,
                   resumed_nodes, single_node_reruns >>
+  /\ UNCHANGED side_effect_vars
 
 \* @command WriteInlineReport
 \* @result WorkflowResult
@@ -393,6 +413,7 @@ WriteInlineReport(g) ==
                   planned_graphs, plan_docs, passed_nodes, terminal_nodes,
                   envelopes, context_items, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command RebuildReport
 \* @result WorkflowResult
@@ -408,6 +429,7 @@ RebuildReport(g) ==
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, package_catalog >>
   /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
 
 \* @command CleanBuild
 \* @result WorkflowResult
@@ -429,6 +451,23 @@ CleanBuild ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, package_catalog,
                   rerunnable_nodes >>
+  /\ UNCHANGED side_effect_vars
+
+\* @command ConfigureSideEffectRuntime
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.configure_side_effect_runtime
+ConfigureSideEffectRuntime(g) ==
+  /\ scaffolded
+  /\ g \in declared_graphs
+  /\ g \notin side_effect_runtime_configured
+  /\ side_effect_runtime_configured' = side_effect_runtime_configured \cup {g}
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                  described_nodes, dsl_deps, overlays, resolved_nodes,
+                  planned_graphs, plan_docs, active_graphs, passed_nodes,
+                  terminal_nodes, envelopes, context_items, input_contexts,
+                  rerunnable_nodes, rerun_guidance, resumed_nodes,
+                  single_node_reruns, run_reports, package_catalog >>
 
 NoOp ==
   UNCHANGED vars
@@ -466,6 +505,8 @@ Next ==
   \/ \E g \in Graphs:
       RebuildReport(g)
   \/ CleanBuild
+  \/ \E g \in Graphs:
+      ConfigureSideEffectRuntime(g)
   \/ NoOp
 
 \* @invariant TypeInvariant
@@ -492,6 +533,7 @@ TypeInvariant ==
   /\ single_node_reruns \in [Graphs -> SUBSET SourceNodes]
   /\ run_reports \subseteq Graphs
   /\ package_catalog \subseteq Packages
+  /\ side_effect_runtime_configured \subseteq Graphs
   /\ result.accepted \in BOOLEAN
 
 \* @invariant ExplicitNodesAreAvailable

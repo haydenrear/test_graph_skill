@@ -9,19 +9,27 @@ status:
   relation_to_desired_program_model: implemented_prefix_of_desired_ticket_plan
   current_model_rule: whole_program_working_copy_not_ticket_projection
   test_modeling_rule: do_not_model_tests_or_validation_harnesses_as_program_behavior
-  updated: null
+  updated: "2026-06-13"
   current_slice:
-    name: baseline
-    status: scaffolded
-    refines: []
-    implemented_actions: []
+    name: TG-5A
+    status: implemented
+    refines:
+      - ../program_model/spec_manifest.yaml
+    implemented_actions:
+      - ConfigureSideEffectRuntime
     validation:
-      unit: []
-      tlc: []
+      unit:
+        - ./gradlew --console=plain :build-logic:test
+        - pytest specs/current/tests
+      tlc:
+        - cd specs/current && tlc2 -config MC.cfg TestGraph.tla
       graph: []
-      evidence: []
+      evidence:
+        - SDK side effects are parsed as typed metadata before node execution.
+        - Malformed side effects are rejected during DSL, describe, or execution-plan validation.
+        - No environment repository, OpenTofu, provisioning marker, or cleanup behavior is implemented in TG-5A.
   next:
-    - Implement TG-5A, then add side_effect_runtime_configured and ConfigureSideEffectRuntime to specs/current.
+    - Implement TG-5B provisioning state markers and lifecycle guardrails.
     - Preserve all existing specs/program_model state/actions unless production behavior changes them.
     - Run TLC and adapter/unit tests before adding graph execution coverage.
 
@@ -34,9 +42,17 @@ case_codegen:
   style: explicit_transition_cases
   generation_status: planned
 
-state_fields: []
-actions: []
-ports: {}
+state_fields:
+  - name: side_effect_runtime_configured
+    purpose: Graphs whose SDK side-effect metadata validation is available.
+actions:
+  - ConfigureSideEffectRuntime
+ports:
+  TestGraphProgramPort:
+    new_methods:
+      configure_side_effect_runtime:
+        command: ConfigureSideEffectRuntime
+        result: WorkflowResult
 adapters: case_adapters.toml
 notes:
   package_from_program_model: testgraph_program_cases

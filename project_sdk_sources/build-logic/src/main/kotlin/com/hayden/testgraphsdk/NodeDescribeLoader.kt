@@ -78,6 +78,8 @@ internal object NodeDescribeLoader {
         val id = MiniJson.str(root["id"]) ?: error("describe output missing id")
         val kind = NodeKind.valueOf((MiniJson.str(root["kind"]) ?: "action").uppercase())
         val reports = MiniJson.obj(root["reports"] ?: emptyMap<String, Any?>())
+        val sideEffects = MiniJson.stringList(root["sideEffects"]).toSet()
+        SideEffectSpec.parseAll(sideEffects, "node '$id' sideEffects")
         return ValidationNodeSpec(
             id = id,
             kind = kind,
@@ -88,7 +90,7 @@ internal object NodeDescribeLoader {
             retries = (root["retries"] as? Long)?.toInt()?.coerceAtLeast(0) ?: 0,
             rerun = (root["rerun"] as? Boolean) ?: true,
             cacheable = MiniJson.bool(root["cacheable"]),
-            sideEffects = MiniJson.stringList(root["sideEffects"]).toSet(),
+            sideEffects = sideEffects,
             inputs = MiniJson.stringMap(root["inputs"]),
             outputs = MiniJson.stringMap(root["outputs"]),
             reports = ReportsSpec(
