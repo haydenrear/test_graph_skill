@@ -5,11 +5,17 @@ SPEC_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = SPEC_ROOT.parents[1]
 
 
-def test_program_model_onboarding_scaffold_has_no_ticket_workflow_dirs() -> None:
+def test_program_model_baseline_can_have_active_ticket_workflow_siblings() -> None:
     assert (SPEC_ROOT / "TestGraph.tla").exists()
     assert (SPEC_ROOT / "spec_manifest.yaml").exists()
-    assert not (SPEC_ROOT.parent / "current").exists()
-    assert not (SPEC_ROOT.parent / "desired_program_model").exists()
+
+    current = SPEC_ROOT.parent / "current"
+    desired = SPEC_ROOT.parent / "desired_program_model"
+    if current.exists() or desired.exists():
+        assert current.exists()
+        assert desired.exists()
+        assert (desired / "ticket_plan.yaml").exists()
+        assert "../program_model/spec_manifest.yaml" in (current / "spec_manifest.yaml").read_text()
 
 
 def test_program_model_points_at_existing_package_surfaces() -> None:
