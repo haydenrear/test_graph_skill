@@ -187,6 +187,14 @@ template source files as ordinary files, create a temporary repository during
 the test with `git init`, `git add`, and `git commit`, then point the SDK at
 that temporary repository path or `file://` URL.
 
+In this repository, TG-5D keeps those source files under
+`test_graph/environment-repository-source/` and validates repository generation
+with:
+
+```bash
+./scripts/run.py generatedEnvironmentRepositoryFixture --test-graph-root test_graph
+```
+
 The environment repository layout is provider-neutral:
 
 ```text

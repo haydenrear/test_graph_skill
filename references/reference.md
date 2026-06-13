@@ -196,6 +196,12 @@ temporary Git repository with `git init`, `git add`, and `git commit` during
 the test that needs one. The SDK contract is deploy-helm neutral; deploy-helm
 is one future environment repository implementation, not a dependency here.
 
+This repository's TG-5D fixture source lives under
+`test_graph/environment-repository-source/`; the
+`generatedEnvironmentRepositoryFixture` graph turns it into a report-local Git
+repository and publishes the path, `file://` URL, commit SHA, template path, and
+required output keys.
+
 ## Gradle DSL
 
 ```kotlin

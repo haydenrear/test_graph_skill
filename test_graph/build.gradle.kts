@@ -26,4 +26,8 @@ validationGraph {
         node("sources/Tg5EnvironmentRepositoryContract.py")
         node("sources/Tg5FutureWorkflowPlan.py")
     }
+
+    testGraph("generatedEnvironmentRepositoryFixture") {
+        node("sources/Tg5GeneratedEnvironmentRepositoryFixture.py")
+    }
 }
