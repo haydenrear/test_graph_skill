@@ -35,7 +35,7 @@ internal object NodeDescribeLoader {
             error("describe produced no output for ${file.name}. " +
                     "Did the script call Node.run(args, spec, body)?")
         }
-        return parseSpec(out.readText(), runtime)
+        return parseSpec(out.readText(), runtime, projectDir)
     }
 
     /**
@@ -73,7 +73,7 @@ internal object NodeDescribeLoader {
             is ValidationRuntime.Uv    -> listOf(tools.uv, "run", file.absolutePath)
         }
 
-    private fun parseSpec(json: String, runtime: ValidationRuntime): ValidationNodeSpec {
+    private fun parseSpec(json: String, runtime: ValidationRuntime, projectDir: File): ValidationNodeSpec {
         val root = MiniJson.obj(MiniJson.parse(json))
         val id = MiniJson.str(root["id"]) ?: error("describe output missing id")
         val kind = NodeKind.valueOf((MiniJson.str(root["kind"]) ?: "action").uppercase())
@@ -91,6 +91,11 @@ internal object NodeDescribeLoader {
             rerun = (root["rerun"] as? Boolean) ?: true,
             cacheable = MiniJson.bool(root["cacheable"]),
             sideEffects = sideEffects,
+            environmentRepository = EnvironmentRepositorySpec.parse(
+                root["environmentRepository"],
+                "node '$id' environmentRepository",
+                projectDir,
+            ),
             inputs = MiniJson.stringMap(root["inputs"]),
             outputs = MiniJson.stringMap(root["outputs"]),
             reports = ReportsSpec(

@@ -23,6 +23,7 @@ validationGraph {
 
     testGraph("branchEnvironmentWorkflow") {
         node("sources/BranchEnvironmentMarkersPresent.py")
+        node("sources/Tg5EnvironmentRepositoryContract.py")
         node("sources/Tg5FutureWorkflowPlan.py")
     }
 }

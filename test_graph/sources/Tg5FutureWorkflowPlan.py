@@ -19,6 +19,7 @@ from branch_environment_harness import ticket_plan_text
 SPEC = (
     NodeSpec("tg5.future.workflow.plan")
     .kind("evidence")
+    .depends_on("tg5.environment.repository.contract")
     .tags("tg5", "environment", "planning")
 )
 

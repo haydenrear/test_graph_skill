@@ -22,6 +22,10 @@ SDK surface.
   written only after successful nodes. Destroy requires
   `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` and removes the provisioned
   marker only after the destroy node passes.
+- Environment repository metadata is declared through `NodeSpec` as a
+  provider-neutral Git repository contract. TG-5C validates source, template,
+  target/backend, branch scope, and required output keys; Git clone, OpenTofu,
+  env propagation, reset, and destroy execution are later tickets.
 - Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
   guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching
@@ -160,6 +164,43 @@ Every `testGraph("name")` registers a graph. The script metadata and DSL
 overlays are merged: collections are unioned, scalars are overridden by the DSL.
 The DSL can add constraints; it should not be used to hide script-declared
 dependencies.
+
+## Branch Environment Repository Contracts
+
+For branch-scoped environments, node metadata can declare an
+`environmentRepository` contract:
+
+```python
+NodeSpec("preview.provision") \
+    .kind("testbed") \
+    .side_effects(SideEffect.environment("provision")) \
+    .environment_repository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview"))
+```
+
+The source must be an ordinary Git URL or local Git repository path. Do not
+commit a nested `.git` directory under the application repository, and do not
+use a tarball/zip as the primary fixture. For local contract tests, version the
+template source files as ordinary files, create a temporary repository during
+the test with `git init`, `git add`, and `git commit`, then point the SDK at
+that temporary repository path or `file://` URL.
+
+The environment repository layout is provider-neutral:
+
+```text
+templates/<target>/
+  main.tf
+  variables.tf
+  outputs.tf
+```
+
+Later execution adapters run `tofu init`, `tofu apply -auto-approve`, then
+`tofu output -json` inside the selected template and must publish
+`EnvironmentId`, `KUBECONFIG`, and `KUBECONTEXT`. Merge-time destroy uses the
+same template with `tofu destroy -auto-approve` and is only allowed when
+`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
 
 ## Discover and Plan
 

@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 
 VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"}
 _ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_ENV_REPO_NAME = re.compile(r"[a-z][a-z0-9-]*")
+_ARCHIVE_SOURCE = re.compile(r".*\.(tar|tar\.gz|tgz|zip)$")
+_REQUIRED_ENV_REPO_OUTPUTS = {"EnvironmentId", "KUBECONFIG", "KUBECONTEXT"}
 _ALLOWED_SIDE_EFFECTS = {
     "db": {"writes"},
     "fs": {"tmp"},
@@ -96,12 +99,81 @@ class SideEffect:
         return cls.of(f"environment:{action.lower()}")
 
 
+@dataclass(frozen=True)
+class EnvironmentRepository:
+    """Provider-neutral Git environment repository contract metadata."""
+
+    source: str
+    template: str
+    target: str = "local-preview"
+    backend: str = "local"
+    branch: str = "feature"
+    output_keys: tuple[str, ...] = ("EnvironmentId", "KUBECONFIG", "KUBECONTEXT")
+
+    @classmethod
+    def of(cls, source: str, template: str) -> "EnvironmentRepository":
+        return cls(source=source, template=template)
+
+    def with_target(self, target: str) -> "EnvironmentRepository":
+        return EnvironmentRepository(self.source, self.template, target, self.backend, self.branch, self.output_keys)
+
+    def with_backend(self, backend: str) -> "EnvironmentRepository":
+        return EnvironmentRepository(self.source, self.template, self.target, backend, self.branch, self.output_keys)
+
+    def with_branch(self, branch: str) -> "EnvironmentRepository":
+        return EnvironmentRepository(self.source, self.template, self.target, self.backend, branch, self.output_keys)
+
+    def with_output_keys(self, *keys: str) -> "EnvironmentRepository":
+        return EnvironmentRepository(self.source, self.template, self.target, self.backend, self.branch, tuple(keys))
+
+    def to_json_obj(self) -> dict[str, object]:
+        _validate_environment_repository(self)
+        return {
+            "source": self.source,
+            "template": self.template,
+            "target": self.target,
+            "backend": self.backend,
+            "branch": self.branch,
+            "outputKeys": list(self.output_keys),
+        }
+
+
 def _validate_env_action(action: str, raw: str) -> None:
     if not action.startswith("[") or not action.endswith("]"):
         raise ValueError(f"malformed env side effect {raw!r}; expected env:[KEY] or env:[*]")
     key = action[1:-1]
     if key != "*" and _ENV_KEY.fullmatch(key) is None:
         raise ValueError(f"malformed env side effect {raw!r}; expected env:[KEY] or env:[*]")
+
+
+def _validate_environment_repository(repository: EnvironmentRepository) -> None:
+    if not isinstance(repository, EnvironmentRepository):
+        raise ValueError("environmentRepository must be an EnvironmentRepository")
+    if not isinstance(repository.source, str) or not repository.source.strip():
+        raise ValueError("environmentRepository.source must be a Git URL or local Git repository path")
+    if not isinstance(repository.template, str) or not repository.template.strip():
+        raise ValueError("environmentRepository.template must name a template directory inside the repository")
+    segments = repository.template.split("/")
+    if (
+        repository.template.startswith("/")
+        or "\\" in repository.template
+        or any(segment in {"", ".", ".."} for segment in segments)
+    ):
+        raise ValueError("environmentRepository.template must be a relative repository path without '.', '..', or empty segments")
+    if _ENV_REPO_NAME.fullmatch(repository.target) is None:
+        raise ValueError("environmentRepository.target must use lowercase words and '-' separators")
+    if _ENV_REPO_NAME.fullmatch(repository.backend) is None:
+        raise ValueError("environmentRepository.backend must use lowercase words and '-' separators")
+    if not isinstance(repository.branch, str) or not repository.branch.strip():
+        raise ValueError("environmentRepository.branch must not be blank")
+    if _ARCHIVE_SOURCE.fullmatch(repository.source.lower()) is not None:
+        raise ValueError("environmentRepository.source must be an ordinary Git URL/path, not an archive or tarball")
+    output_keys = set(repository.output_keys)
+    if not _REQUIRED_ENV_REPO_OUTPUTS.issubset(output_keys):
+        raise ValueError(f"environmentRepository.outputKeys must include {sorted(_REQUIRED_ENV_REPO_OUTPUTS)}")
+    for key in output_keys:
+        if _ENV_KEY.fullmatch(key) is None:
+            raise ValueError(f"environmentRepository.outputKeys contains invalid key {key!r}")
 
 
 @dataclass
@@ -122,6 +194,7 @@ class NodeSpec:
     _rerun: bool = True
     _cacheable: bool = False
     _side_effects: list[str] = field(default_factory=list)
+    _environment_repository: EnvironmentRepository | None = None
     _inputs: dict[str, str] = field(default_factory=dict)
     _outputs: dict[str, str] = field(default_factory=dict)
     _junit_xml: bool = False
@@ -181,6 +254,11 @@ class NodeSpec:
             self._side_effects.append(effect.raw)
         return self
 
+    def environment_repository(self, repository: EnvironmentRepository) -> "NodeSpec":
+        _validate_environment_repository(repository)
+        self._environment_repository = repository
+        return self
+
     def input(self, name: str, type_: str = "string") -> "NodeSpec":
         self._inputs[name] = type_
         return self
@@ -198,25 +276,25 @@ class NodeSpec:
         return self
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "id": self.id,
-                "kind": self._kind,
-                "runtime": "uv",
-                "dependsOn": list(self._depends_on),
-                "tags": list(self._tags),
-                "timeout": self._timeout,
-                "retries": self._retries,
-                "rerun": self._rerun,
-                "cacheable": self._cacheable,
-                "sideEffects": list(self._side_effects),
-                "inputs": dict(self._inputs),
-                "outputs": dict(self._outputs),
-                "reports": {
-                    "structuredJson": True,
-                    "junitXml": self._junit_xml,
-                    "cucumber": self._cucumber,
-                },
+        obj: dict[str, object] = {
+            "id": self.id,
+            "kind": self._kind,
+            "runtime": "uv",
+            "dependsOn": list(self._depends_on),
+            "tags": list(self._tags),
+            "timeout": self._timeout,
+            "retries": self._retries,
+            "rerun": self._rerun,
+            "cacheable": self._cacheable,
+            "sideEffects": list(self._side_effects),
+            "inputs": dict(self._inputs),
+            "outputs": dict(self._outputs),
+            "reports": {
+                "structuredJson": True,
+                "junitXml": self._junit_xml,
+                "cucumber": self._cucumber,
             },
-            separators=(",", ":"),
-        )
+        }
+        if self._environment_repository is not None:
+            obj["environmentRepository"] = self._environment_repository.to_json_obj()
+        return json.dumps(obj, separators=(",", ":"))

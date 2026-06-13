@@ -32,6 +32,7 @@ public final class NodeSpec {
     private boolean rerun = true;
     private boolean cacheable = false;
     private final Set<String> sideEffects = new LinkedHashSet<>();
+    private EnvironmentRepository environmentRepository = null;
     private final Map<String, String> inputs = new LinkedHashMap<>();
     private final Map<String, String> outputs = new LinkedHashMap<>();
     private boolean reportStructuredJson = true;
@@ -82,6 +83,11 @@ public final class NodeSpec {
         return this;
     }
     public NodeSpec sideEffect(SideEffect effect)    { sideEffects.add(effect.raw()); return this; }
+    public NodeSpec environmentRepository(EnvironmentRepository repository) {
+        if (repository == null) throw new IllegalArgumentException("environmentRepository must not be null");
+        this.environmentRepository = repository;
+        return this;
+    }
     public NodeSpec input(String name, String type)  { inputs.put(name, type); return this; }
     public NodeSpec output(String name, String type) { outputs.put(name, type); return this; }
     public NodeSpec junitXml()                       { this.reportJunitXml = true; return this; }
@@ -111,6 +117,7 @@ public final class NodeSpec {
         out.put("rerun", rerun);
         out.put("cacheable", cacheable);
         out.put("sideEffects", new ArrayList<>(sideEffects));
+        if (environmentRepository != null) out.put("environmentRepository", environmentRepository.toMap());
         out.put("inputs", inputs);
         out.put("outputs", outputs);
         out.put("reports", reports);

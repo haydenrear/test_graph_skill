@@ -23,6 +23,7 @@ emitted JSON; no YAML sidecar.
 | `rerun`        | boolean                                                                     | no       | Default: true. Controls whether failed-run guidance should offer direct rerun from saved input context. |
 | `cacheable`    | boolean                                                                     | no       | Default: false. Only true if the node is a pure function of its inputs. |
 | `sideEffects`  | list\<string\>                                                              | no       | Typed registry; see side effects below.                        |
+| `environmentRepository` | object                                                            | no       | Provider-neutral Git environment repository contract metadata.  |
 | `inputs`       | map\<string, type\>                                                         | no       | Typed inputs the node reads from context.                      |
 | `outputs`      | map\<string, type\>                                                         | no       | Typed outputs the node produces in its envelope.               |
 | `reports`      | object                                                                      | no       | See below.                                                     |
@@ -41,6 +42,10 @@ NodeSpec.of("login.smoke")
     .cacheable(false)
     .sideEffects("browser")
     .sideEffect(SideEffect.env("KUBECONFIG"))
+    .environmentRepository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview"))
     .input("baseUrl", "string")
     .output("success", "boolean")
     .junitXml()
@@ -59,6 +64,10 @@ NodeSpec("login.smoke") \
     .cacheable(False) \
     .side_effects("browser") \
     .side_effects(SideEffect.env("KUBECONFIG")) \
+    .environment_repository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview")) \
     .input("baseUrl", "string") \
     .output("success", "boolean") \
     .junit_xml() \
@@ -127,6 +136,65 @@ Environment ids are branch-scoped:
 `local`. Target defaults to `local-preview`; backend defaults to `local`.
 Destroy is refused before node execution unless
 `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+
+### Environment Repository Contract
+
+`environmentRepository` declares the Git repository contract a later execution
+adapter will use for branch-scoped environments. TG-5C validates and carries
+this metadata only; it does not clone Git repositories or run OpenTofu.
+
+```json
+{
+  "environmentRepository": {
+    "source": "git@github.com:example/environments.git",
+    "template": "templates/local-preview",
+    "target": "local-preview",
+    "backend": "local",
+    "branch": "feature",
+    "outputKeys": ["EnvironmentId", "KUBECONFIG", "KUBECONTEXT"]
+  }
+}
+```
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `source` | yes | Ordinary Git URL or local Git repository path. Accepted examples include `git@...`, `https://...`, `ssh://...`, `git://...`, `file:///tmp/env-repo`, and local paths. Archive and tarball sources are rejected. |
+| `template` | yes | Relative directory inside the environment repo, such as `templates/local-preview`. Absolute paths, empty path segments, `.`, and `..` are rejected. |
+| `target` | no | Logical environment target. Defaults to `local-preview`; AWS variants are explicit later tickets. |
+| `backend` | no | Execution backend. Defaults to `local`. |
+| `branch` | no | Branch scope selector. Defaults to `feature`, meaning the runtime feature branch resolved from `TEST_GRAPH_FEATURE_BRANCH`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, then `local`. |
+| `outputKeys` | no | Structured keys returned by the environment repository. Must include `EnvironmentId`, `KUBECONFIG`, and `KUBECONTEXT`. |
+
+Repository layout contract:
+
+```text
+<environment-repo>/
+  templates/
+    local-preview/
+      main.tf
+      variables.tf
+      outputs.tf
+```
+
+The standard execution sequence for a later adapter is:
+
+1. Clone or reuse `source` outside the application repository.
+2. Check out the selected ref when configured.
+3. Enter `template`.
+4. Run `tofu init`.
+5. Run `tofu apply -auto-approve` for provision/reuse and reset workflows.
+6. Read `tofu output -json` and publish at least `EnvironmentId`,
+   `KUBECONFIG`, and `KUBECONTEXT`.
+7. Run `tofu destroy -auto-approve` only for merge-time destroy when
+   `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+
+Contract tests must not check in a nested Git repository or use a tarball as
+the primary fixture. Version ordinary source/template files, then create a real
+temporary Git repository with `git init`, `git add`, and `git commit` during
+the test that needs one. The SDK contract is deploy-helm neutral; deploy-helm
+is one future environment repository implementation, not a dependency here.
 
 ## Gradle DSL
 
