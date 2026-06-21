@@ -584,6 +584,9 @@ class PlanExecutor(
             record.provisionedMarker?.let {
                 append(",\"provisionedMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
             }
+            record.deployedMarker?.let {
+                append(",\"deployedMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
+            }
             record.resetMarker?.let {
                 append(",\"resetMarker\":").append(jsonString(relativeToReport(reportRoot, it)))
             }

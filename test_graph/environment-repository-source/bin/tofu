@@ -9,6 +9,7 @@ case "$cmd" in
     mkdir -p .terraform
     ;;
   apply)
+    rm -rf generated
     mkdir -p generated
     printf 'apiVersion: v1\nkind: Config\ncurrent-context: %s\n' "test-graph-${TF_VAR_branch:-local}" > generated/kubeconfig
     ;;

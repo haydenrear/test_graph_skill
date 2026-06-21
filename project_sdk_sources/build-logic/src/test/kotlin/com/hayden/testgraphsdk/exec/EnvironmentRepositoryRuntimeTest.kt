@@ -44,14 +44,33 @@ class EnvironmentRepositoryRuntimeTest {
         assertTrue(second.reused)
         assertFalse(second.commands.any { it.label == "tofu-apply" })
         assertEquals(first.outputs["KUBECONFIG"], second.outputs["KUBECONFIG"])
+
+        val deploy = node("environment.deploy", source, "environment:deploy")
+        val deployed = runtime.execute(deploy, state.prepare(deploy))
+            ?: error("expected environment repository deploy reuse")
+
+        assertTrue(deployed.reused)
+        assertFalse(deployed.commands.any { it.label == "tofu-apply" })
+        assertEquals(first.outputs["KUBECONFIG"], deployed.outputs["KUBECONFIG"])
+
+        val reset = node("environment.reset", source, "environment:reset")
+        val resetExecution = runtime.execute(reset, state.prepare(reset))
+            ?: error("expected environment repository reset")
+
+        assertFalse(resetExecution.reused)
+        assertTrue(resetExecution.commands.any { it.label == "tofu-apply" })
     }
 
-    private fun node(id: String, source: File): ValidationNodeSpec =
+    private fun node(
+        id: String,
+        source: File,
+        sideEffect: String = "environment:provision",
+    ): ValidationNodeSpec =
         ValidationNodeSpec(
             id = id,
             kind = NodeKind.ACTION,
             runtime = ValidationRuntime.Uv("sources/$id.py"),
-            sideEffects = setOf("environment:provision"),
+            sideEffects = setOf(sideEffect),
             environmentRepository = EnvironmentRepositorySpec(
                 source = source.absolutePath,
                 template = "templates/local-preview",

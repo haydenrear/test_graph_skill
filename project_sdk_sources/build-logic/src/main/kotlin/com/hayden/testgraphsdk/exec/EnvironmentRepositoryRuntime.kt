@@ -50,7 +50,12 @@ internal class EnvironmentRepositoryRuntime(
         if (actions.none { it in ENVIRONMENT_REPOSITORY_ACTIONS }) return null
 
         val alreadyProvisioned = provisioningState.isProvisioned(provisioning.identity)
-        val reused = "reuse" in actions || ("provision" in actions && alreadyProvisioned)
+        val needsExistingEnvironment = actions.any { it in EXISTING_ENVIRONMENT_ACTIONS }
+        if (needsExistingEnvironment && !alreadyProvisioned) {
+            error("node '${spec.id}' declares ${actions.sorted()} but branch environment '${provisioning.identity.id}' is not provisioned")
+        }
+
+        val reused = "reuse" in actions || "deploy" in actions || ("provision" in actions && alreadyProvisioned)
         if ("reuse" in actions && !alreadyProvisioned) {
             error("node '${spec.id}' declares environment:reuse but branch environment '${provisioning.identity.id}' is not provisioned")
         }
@@ -218,6 +223,7 @@ internal class EnvironmentRepositoryRuntime(
 
     companion object {
         private const val DEFAULT_TIMEOUT_MILLIS = 5 * 60 * 1000L
-        private val ENVIRONMENT_REPOSITORY_ACTIONS = setOf("provision", "reuse", "reset", "destroy")
+        private val ENVIRONMENT_REPOSITORY_ACTIONS = setOf("provision", "reuse", "deploy", "reset", "destroy")
+        private val EXISTING_ENVIRONMENT_ACTIONS = setOf("reuse", "deploy", "reset", "destroy")
     }
 }

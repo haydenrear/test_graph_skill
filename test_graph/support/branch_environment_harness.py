@@ -24,6 +24,21 @@ def reset_markers(report_dir: Path, environment_id: str, run_id: str) -> list[Pa
     return sorted(reset_dir.glob(f"{environment_id}__{run_id}__*.json"))
 
 
+def deployed_marker(report_dir: Path, environment_id: str) -> Path:
+    return provisioning_state_root(report_dir) / "deployed" / f"{environment_id}.json"
+
+
+def destroyed_marker(report_dir: Path, environment_id: str) -> Path:
+    return provisioning_state_root(report_dir) / "destroyed" / f"{environment_id}.json"
+
+
+def destroy_request_markers(report_dir: Path, environment_id: str, run_id: str) -> list[Path]:
+    request_dir = provisioning_state_root(report_dir) / "destroy-requested"
+    if not request_dir.is_dir():
+        return []
+    return sorted(request_dir.glob(f"{environment_id}__{run_id}__*.json"))
+
+
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {}
 

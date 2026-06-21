@@ -117,19 +117,19 @@ Current registered forms:
 
 TG-5A validates and carries this metadata. TG-5B adds framework-managed marker
 files for `environment:provision`, `environment:reset`, and
-`environment:destroy`. TG-5E adds environment repository execution for
-provision/reuse flows and downstream `env:[KEY]` / `env:[*]` projection.
-Application deployment, reset execution, AWS provisioning, and merge destroy
-execution remain later lifecycle work.
+`environment:destroy`. Environment repository execution supports provision,
+reuse, deploy, reset, guarded destroy, and downstream `env:[KEY]` / `env:[*]`
+projection. AWS provisioning remains future adapter work.
 
 Marker state lives under `build/testgraph-provisioning-state/`:
 
 | Directory | Meaning |
 | --- | --- |
 | `provisioned/<environment-id>.json` | A node with `environment:provision` passed and the branch environment is considered active. |
+| `deployed/<environment-id>.json` | A node with `environment:deploy` passed and application state is considered present. |
 | `reset/<environment-id>__<run-node>.json` | A reset was requested for redeploy; the provisioned marker remains in place. |
 | `destroy-requested/<environment-id>__<run-node>.json` | A destroy node had explicit destroy authorization. |
-| `destroyed/<environment-id>.json` | An authorized destroy node passed and the provisioned marker was removed. |
+| `destroyed/<environment-id>.json` | An authorized destroy node passed and the provisioned/deployed markers were removed. |
 
 Environment ids are branch-scoped:
 `<graph>__<branch>__<target>__<backend>`. The executor derives branch from
@@ -138,7 +138,8 @@ Environment ids are branch-scoped:
 AWS target/backend selections fail fast unless `AWS_PROFILE`,
 `AWS_ACCESS_KEY_ID`, or `AWS_WEB_IDENTITY_TOKEN_FILE` is present.
 Destroy is refused before node execution unless
-`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+`TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
 
 ### Environment Repository Contract
 
@@ -188,12 +189,13 @@ The standard execution sequence is:
 2. Check out the selected ref when configured.
 3. Enter `template`.
 4. Run `tofu init`.
-5. Run `tofu apply -auto-approve` for first provision. If the branch
-   environment is already provisioned, reuse skips apply and reads outputs.
+5. Run `tofu apply -auto-approve` for first provision and reset. If the branch
+   environment is already provisioned, reuse/deploy skips apply and reads
+   outputs.
 6. Read `tofu output -json` and publish at least `EnvironmentId`,
    `KUBECONFIG`, and `KUBECONTEXT`.
 7. Run `tofu destroy -auto-approve` only for merge-time destroy when
-   `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+   explicit destroy intent is present.
 
 Contract tests must not check in a nested Git repository or use a tarball as
 the primary fixture. Version ordinary source/template files, then create a real
@@ -210,6 +212,14 @@ required output keys.
 TG-5E adds `environmentRepositoryContract`, which creates a build-local Git
 fixture, exercises init/apply/output, verifies reuse skips apply, and validates
 downstream `env:[KEY]` and `env:[*]` projection.
+
+TG-5F adds `branchEnvironmentReset` and `branchEnvironmentMergeDestroy`.
+`branchEnvironmentReset` deploys a fake application marker into the preview
+environment, reruns apply through `environment:reset`, verifies application
+state is cleared, and keeps the provisioned marker. `branchEnvironmentMergeDestroy`
+is safe during normal `run.py --all`; it only declares `environment:destroy`
+when explicit destroy intent is present and then verifies provisioned/deployed
+markers are removed after `tofu destroy` succeeds.
 
 ## Gradle DSL
 

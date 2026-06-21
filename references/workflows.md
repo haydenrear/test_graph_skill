@@ -19,13 +19,15 @@ SDK surface.
   fail during describe/plan validation before node execution starts.
 - Branch-environment marker state lives under
   `build/testgraph-provisioning-state/`. Provision and reset markers are
-  written only after successful nodes. Destroy requires
-  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` and removes the provisioned
-  marker only after the destroy node passes.
+  written only after successful nodes. Deploy writes application lifecycle
+  state. Destroy requires `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+  `TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true` and removes provisioned/deployed
+  markers only after the destroy node passes.
 - Environment repository metadata is declared through `NodeSpec` as a
   provider-neutral Git repository contract. TG-5C validates source, template,
   target/backend, branch scope, and required output keys; Git clone, OpenTofu,
-  env propagation, reset, and destroy execution are later tickets.
+  env propagation, reset, and guarded destroy execution are covered by the SDK
+  contract fixture. AWS provisioning remains later adapter work.
 - Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
   guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching
@@ -205,12 +207,12 @@ templates/<target>/
 ```
 
 Environment repository execution runs `tofu init`, runs
-`tofu apply -auto-approve` for first provision, then reads
+`tofu apply -auto-approve` for first provision or reset, then reads
 `tofu output -json` inside the selected template and publishes `EnvironmentId`,
 `KUBECONFIG`, and `KUBECONTEXT`. If the branch environment already has a
-provisioned marker, the runtime reuses it and skips apply. Downstream nodes can
-request those outputs as process environment variables with `env:[KEY]`, or all
-eligible context keys with `env:[*]`.
+provisioned marker, reuse and deploy nodes skip apply and read outputs.
+Downstream nodes can request those outputs as process environment variables
+with `env:[KEY]`, or all eligible context keys with `env:[*]`.
 
 In this repository, TG-5E validates that flow with:
 
@@ -219,8 +221,14 @@ In this repository, TG-5E validates that flow with:
 ```
 
 Merge-time destroy uses the same template with `tofu destroy -auto-approve` and
-is only allowed when `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`; full reset,
-deploy, and destroy lifecycle wiring is later ticket work.
+is only allowed when explicit destroy intent is present. Normal all-graph runs
+do not request destroy, so the guarded merge-destroy graph verifies that the
+environment remains active by default. Run the destructive path explicitly:
+
+```bash
+./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
+TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
+```
 
 ## Discover and Plan
 

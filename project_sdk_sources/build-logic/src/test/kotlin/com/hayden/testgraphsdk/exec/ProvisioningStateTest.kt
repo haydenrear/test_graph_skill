@@ -49,13 +49,17 @@ class ProvisioningStateTest {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val state = state(projectDir)
         val provision = node("environment.provision", "environment:provision")
+        val deploy = node("environment.deploy", "environment:deploy")
         val reset = node("environment.reset", "environment:reset")
 
         val provisionRecord = state.recordSuccessful(provision, state.prepare(provision), "passed")
         val provisionedMarker = assertNotNull(provisionRecord?.provisionedMarker)
+        val deployRecord = state.recordSuccessful(deploy, state.prepare(deploy), "passed")
+        val deployedMarker = assertNotNull(deployRecord?.deployedMarker)
         val resetRecord = state.recordSuccessful(reset, state.prepare(reset), "passed")
 
         assertTrue(provisionedMarker.isFile)
+        assertFalse(deployedMarker.exists())
         assertTrue(assertNotNull(resetRecord?.resetMarker).isFile)
         assertTrue(provisionedMarker.isFile)
     }
@@ -67,15 +71,19 @@ class ProvisioningStateTest {
         val provision = node("environment.provision", "environment:provision")
         val provisionRecord = provisionState.recordSuccessful(provision, provisionState.prepare(provision), "passed")
         val marker = assertNotNull(provisionRecord?.provisionedMarker)
+        val deploy = node("environment.deploy", "environment:deploy")
+        val deployRecord = provisionState.recordSuccessful(deploy, provisionState.prepare(deploy), "passed")
+        val deployedMarker = assertNotNull(deployRecord?.deployedMarker)
 
         assertFailsWith<IllegalArgumentException> {
             provisionState.prepare(node("environment.destroy", "environment:destroy"))
         }
         assertTrue(marker.isFile)
+        assertTrue(deployedMarker.isFile)
 
         val destroyState = state(
             projectDir,
-            env = baseEnv() + ("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT" to "true"),
+            env = baseEnv() + ("TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT" to "true"),
         )
         val destroy = node("environment.destroy", "environment:destroy")
         val prepared = destroyState.prepare(destroy)
@@ -88,6 +96,7 @@ class ProvisioningStateTest {
         assertNotNull(destroyRecord.destroyRequestMarker)
         assertNotNull(destroyRecord.destroyedMarker)
         assertFalse(marker.exists())
+        assertFalse(deployedMarker.exists())
     }
 
     @Test

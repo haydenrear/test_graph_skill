@@ -38,4 +38,20 @@ validationGraph {
         node("sources/Tg5EnvironmentContextEnvAll.py")
         node("sources/Tg5EnvironmentRepositoryReuse.py")
     }
+
+    testGraph("branchEnvironmentReset") {
+        node("sources/Tg5StableEnvironmentRepositoryFixture.py")
+        node("sources/Tg5EnvironmentRepositoryProvision.py")
+        node("sources/Tg5EnvironmentRepositoryDeploy.py")
+        node("sources/Tg5EnvironmentRepositoryReset.py")
+        node("sources/Tg5BranchEnvironmentResetMarkers.py")
+    }
+
+    testGraph("branchEnvironmentMergeDestroy") {
+        node("sources/Tg5StableEnvironmentRepositoryFixture.py")
+        node("sources/Tg5EnvironmentRepositoryProvision.py")
+        node("sources/Tg5EnvironmentRepositoryDeploy.py")
+        node("sources/Tg5EnvironmentRepositoryDestroy.py")
+        node("sources/Tg5BranchEnvironmentDestroyMarkers.py")
+    }
 }

@@ -33,6 +33,7 @@ internal data class ProvisioningStateRecord(
     val identity: BranchEnvironmentIdentity,
     val actions: Set<String>,
     val provisionedMarker: File?,
+    val deployedMarker: File?,
     val resetMarker: File?,
     val destroyRequestMarker: File?,
     val destroyedMarker: File?,
@@ -95,9 +96,16 @@ internal class ProvisioningState(
             }
         } else null
 
+        val deployedMarker = if ("deploy" in prepared.actions) {
+            marker("deployed", identity.id).also {
+                writeMarker(it, identity, spec, timestamp, "deployed")
+            }
+        } else null
+
         val resetMarker = if ("reset" in prepared.actions) {
             marker("reset", "${identity.id}__${safeRunNode(spec)}").also {
                 writeMarker(it, identity, spec, timestamp, "reset")
+                markerFile("deployed", identity.id).delete()
             }
         } else null
 
@@ -111,6 +119,7 @@ internal class ProvisioningState(
             marker("destroyed", identity.id).also {
                 writeMarker(it, identity, spec, timestamp, "destroyed")
                 marker("provisioned", identity.id).delete()
+                markerFile("deployed", identity.id).delete()
             }
         } else null
 
@@ -118,6 +127,7 @@ internal class ProvisioningState(
             identity = identity,
             actions = prepared.actions,
             provisionedMarker = provisionedMarker,
+            deployedMarker = deployedMarker,
             resetMarker = resetMarker,
             destroyRequestMarker = destroyRequestMarker,
             destroyedMarker = destroyedMarker,
@@ -157,8 +167,8 @@ internal class ProvisioningState(
             .firstOrNull { it.isNotEmpty() }
 
     private fun destroyRequested(): Boolean =
-        env["TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT"]?.trim()?.lowercase() in
-            setOf("1", "true", "yes", "y")
+        firstEnv("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")
+            ?.lowercase() in setOf("1", "true", "yes", "y")
 
     private fun awsCredentialsPresent(): Boolean =
         firstEnv("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_WEB_IDENTITY_TOKEN_FILE") != null

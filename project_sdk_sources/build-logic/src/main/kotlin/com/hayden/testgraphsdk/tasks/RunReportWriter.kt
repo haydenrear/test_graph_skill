@@ -283,7 +283,7 @@ internal object RunReportWriter {
         (map["actions"] as? List<*>)?.takeIf { it.isNotEmpty() }?.let { actions ->
             sb.append("- `actions`: `").append(actions.joinToString(",")).append("`\n")
         }
-        listOf("provisionedMarker", "resetMarker", "destroyRequestMarker", "destroyedMarker").forEach { key ->
+        listOf("provisionedMarker", "deployedMarker", "resetMarker", "destroyRequestMarker", "destroyedMarker").forEach { key ->
             (map[key] as? String)?.let { path ->
                 sb.append("- `").append(key).append("`: [`").append(path).append("`](").append(path).append(")\n")
             }
