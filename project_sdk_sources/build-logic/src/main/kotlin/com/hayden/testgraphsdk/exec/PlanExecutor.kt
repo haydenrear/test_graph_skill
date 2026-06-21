@@ -55,6 +55,11 @@ class PlanExecutor(
         val executionPlan = resumeState.executionPlan
         executionPlan.forEach { it.sideEffectSpecs() }
         val provisioningState = ProvisioningState(projectDir.asFile, graphName, runId)
+        val environmentRepositoryRuntime = EnvironmentRepositoryRuntime(
+            projectDir = projectDir.asFile,
+            reportRoot = reportRoot,
+            provisioningState = provisioningState,
+        )
 
         // .tmp-results/ holds the SDK's raw NodeResult JSON before we
         // post-process it. node-logs/ holds the merged stdout+stderr
@@ -79,8 +84,11 @@ class PlanExecutor(
             val timeoutMillis = TimeoutParser.parseMillis(spec.timeout)
             val maxAttempts = spec.retries + 1
             val preparedProvisioning = provisioningState.prepare(spec)
+            val sideEffectSpecs = spec.sideEffectSpecs()
+            val projectedEnvironment = EnvironmentContextProjection.project(cumulative, sideEffectSpecs)
 
             var execOutcome: ExecutionOutcome = ExecutionOutcome.TimedOut
+            var environmentExecution: EnvironmentRepositoryExecution? = null
             var startedAt = Instant.now()
             var endedAt = startedAt
             for (attempt in 1..maxAttempts) {
@@ -96,6 +104,16 @@ class PlanExecutor(
                 // this being unambiguous.
                 resultOut.delete()
 
+                environmentExecution = try {
+                    environmentRepositoryRuntime.execute(spec, preparedProvisioning)
+                } catch (e: Exception) {
+                    writeEnvironmentRepositoryFailureResult(spec, resultOut, e)
+                    startedAt = Instant.now()
+                    endedAt = startedAt
+                    execOutcome = ExecutionOutcome.Completed(-1)
+                    break
+                }
+
                 val invocation = NodeInvocation(
                     spec = spec,
                     projectDir = projectDir,
@@ -104,7 +122,9 @@ class PlanExecutor(
                     contextArg = contextArg,
                     resultOut = resultOut,
                     stdoutLog = stdoutLog,
-                    environment = preparedProvisioning?.environment ?: emptyMap(),
+                    environment = projectedEnvironment +
+                            (preparedProvisioning?.environment ?: emptyMap()) +
+                            (environmentExecution?.environment ?: emptyMap()),
                     timeoutMillis = timeoutMillis,
                 )
 
@@ -143,12 +163,21 @@ class PlanExecutor(
                 logger.lifecycle("  run only: ${rerunGuidance.runOnlyCommand}")
                 addRerunGuidance(outcome.envelopeJson, rerunGuidance)
             }
+            val withEnvironmentOutputs = mergePublished(
+                envelopeJson,
+                environmentExecution?.publishedOutputs ?: emptyMap(),
+            )
+            val withEnvironmentRepository = addEnvironmentRepositoryExecution(
+                withEnvironmentOutputs,
+                environmentExecution,
+                reportRoot,
+            )
             val provisioningRecord = provisioningState.recordSuccessful(
                 spec = spec,
                 prepared = preparedProvisioning,
                 status = outcome.status,
             )
-            envelope.writeText(addProvisioningState(envelopeJson, provisioningRecord, reportRoot))
+            envelope.writeText(addProvisioningState(withEnvironmentRepository, provisioningRecord, reportRoot))
 
             cumulative += readContextItem(spec.id)
 
@@ -414,6 +443,126 @@ class PlanExecutor(
             appendRerunGuidance(guidance)
             append("}\n")
         }
+    }
+
+    private fun writeEnvironmentRepositoryFailureResult(
+        spec: ValidationNodeSpec,
+        resultOut: File,
+        error: Exception,
+    ) {
+        resultOut.parentFile.mkdirs()
+        val now = Instant.now().toString()
+        resultOut.writeText(
+            buildString {
+                append("{")
+                append("\"nodeId\":").append(jsonString(spec.id))
+                append(",\"status\":\"errored\"")
+                append(",\"failureMessage\":")
+                append(jsonString("environmentRepository failed: ${error.message ?: error::class.simpleName}"))
+                append(",\"startedAt\":").append(jsonString(now))
+                append(",\"endedAt\":").append(jsonString(now))
+                append(",\"assertions\":[]")
+                append(",\"artifacts\":[]")
+                append(",\"processes\":[]")
+                append(",\"metrics\":{}")
+                append(",\"logs\":[]")
+                append(",\"published\":{}")
+                append("}\n")
+            }
+        )
+    }
+
+    private fun mergePublished(
+        envelopeJson: String,
+        additions: Map<String, String>,
+    ): String {
+        if (additions.isEmpty()) return envelopeJson
+        val parsed = MiniJson.parse(envelopeJson) as? Map<*, *>
+        val published = linkedMapOf<String, String>()
+        published.putAll(MiniJson.stringMap(parsed?.get("published")))
+        published.putAll(additions)
+
+        val replacement = buildString {
+            append("\"published\":{")
+            published.entries.forEachIndexed { index, (key, value) ->
+                if (index > 0) append(",")
+                append(jsonString(key)).append(":").append(jsonString(value))
+            }
+            append("}")
+        }
+
+        val range = objectValueRange(envelopeJson, "\"published\"")
+        if (range != null) {
+            return envelopeJson.replaceRange(range, replacement)
+        }
+
+        val trimmed = envelopeJson.trimEnd().removeSuffix("}")
+        val sep = if (trimmed.trimEnd().endsWith("{")) "" else ","
+        return "$trimmed$sep$replacement}\n"
+    }
+
+    private fun addEnvironmentRepositoryExecution(
+        envelopeJson: String,
+        execution: EnvironmentRepositoryExecution?,
+        reportRoot: File,
+    ): String {
+        if (execution == null) return envelopeJson
+        val trimmed = envelopeJson.trimEnd().removeSuffix("}")
+        return buildString {
+            append(trimmed)
+            append(",\"environmentRepositoryExecution\":{")
+            append("\"environmentId\":").append(jsonString(execution.identity.id))
+            append(",\"branch\":").append(jsonString(execution.identity.branch))
+            append(",\"target\":").append(jsonString(execution.identity.target))
+            append(",\"backend\":").append(jsonString(execution.identity.backend))
+            append(",\"repositoryDir\":").append(jsonString(relativeToReport(reportRoot, execution.repositoryDir)))
+            append(",\"templateDir\":").append(jsonString(relativeToReport(reportRoot, execution.templateDir)))
+            append(",\"reused\":").append(execution.reused)
+            append(",\"outputs\":{")
+            execution.outputs.entries.forEachIndexed { index, (key, value) ->
+                if (index > 0) append(",")
+                append(jsonString(key)).append(":").append(jsonString(value))
+            }
+            append("}")
+            append(",\"commands\":[")
+            execution.commands.forEachIndexed { index, command ->
+                if (index > 0) append(",")
+                append("{")
+                append("\"label\":").append(jsonString(command.label))
+                append(",\"command\":")
+                appendJsonArray(command.command)
+                append(",\"exitCode\":").append(command.exitCode)
+                append(",\"log\":").append(jsonString(relativeToReport(reportRoot, command.log)))
+                append("}")
+            }
+            append("]}")
+            append("}\n")
+        }
+    }
+
+    private fun objectValueRange(json: String, key: String): IntRange? {
+        val keyIndex = json.indexOf(key)
+        if (keyIndex < 0) return null
+        val colon = json.indexOf(':', keyIndex)
+        if (colon < 0) return null
+        val braceStart = json.indexOf('{', colon)
+        if (braceStart < 0) return null
+        var depth = 0
+        var end = -1
+        for (i in braceStart until json.length) {
+            when (json[i]) {
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        end = i
+                        break
+                    }
+                }
+            }
+        }
+        if (end < 0) return null
+        return keyIndex..end
     }
 
     private fun addProvisioningState(

@@ -1,14 +1,12 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Current whole-program model for TG-5E. The accepted baseline already models
+\* Desired whole-program model for TG-5. The accepted baseline already models
 \* graph definition, dependency resolution, node execution, published context,
-\* reports, and build-directory rerun semantics. TG-5A adds SDK side-effect
-\* runtime metadata validation. TG-5B adds provisioning marker state and
-\* merge-gated destroy guardrails. TG-5C adds the provider-neutral Git
-\* environment repository contract and branch environment declaration. TG-5E
-\* adds reusable environment repository execution and downstream environment
-\* context propagation.
+\* reports, and resumable build directories. TG-5 adds branch-scoped
+\* environment repository deployments whose Kubernetes clusters are reused per
+\* feature branch, reset for redeploys, and destroyed only when merge-time
+\* destroy intent is present.
 
 CONSTANTS
   Graphs,
@@ -53,6 +51,7 @@ VARIABLES
   provisioned_branch_environments,
   reused_branch_environments,
   reset_branch_environments,
+  deployed_branch_environments,
   propagated_environment_contexts,
   merge_destroy_requested,
   destroy_authorized_environments,
@@ -70,25 +69,22 @@ vars ==
      feature_branches, environment_repo_configured,
      branch_environment_specs, provisioned_branch_environments,
      reused_branch_environments, reset_branch_environments,
-     propagated_environment_contexts, merge_destroy_requested,
-     destroy_authorized_environments, destroyed_branch_environments,
-     environment_context_keys, result >>
+     deployed_branch_environments, propagated_environment_contexts,
+     merge_destroy_requested, destroy_authorized_environments,
+     destroyed_branch_environments, environment_context_keys, result >>
 
 resumption_vars ==
   << input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
      single_node_reruns >>
 
-side_effect_vars ==
-  << side_effect_runtime_configured >>
-
-provisioning_vars ==
-  << provisioning_state_configured, feature_branches,
-     environment_repo_configured, branch_environment_specs,
-     provisioned_branch_environments,
-     reused_branch_environments,
-     reset_branch_environments, merge_destroy_requested,
-     propagated_environment_contexts, destroy_authorized_environments,
-     destroyed_branch_environments, environment_context_keys >>
+environment_vars ==
+  << side_effect_runtime_configured, provisioning_state_configured,
+     feature_branches, environment_repo_configured, branch_environment_specs,
+     provisioned_branch_environments, reused_branch_environments,
+     reset_branch_environments, deployed_branch_environments,
+     propagated_environment_contexts, merge_destroy_requested,
+     destroy_authorized_environments, destroyed_branch_environments,
+     environment_context_keys >>
 
 BranchEnvironment(g, b, target, backend) ==
   [graph |-> g, branch |-> b, target |-> target, backend |-> backend]
@@ -166,6 +162,7 @@ Init ==
   /\ provisioned_branch_environments = {}
   /\ reused_branch_environments = {}
   /\ reset_branch_environments = {}
+  /\ deployed_branch_environments = {}
   /\ propagated_environment_contexts = {}
   /\ merge_destroy_requested = {}
   /\ destroy_authorized_environments = {}
@@ -186,8 +183,7 @@ ScaffoldProject ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command RegisterGraph
 \* @result WorkflowResult
@@ -204,8 +200,7 @@ RegisterGraph(g) ==
                   passed_nodes, terminal_nodes, envelopes, context_items,
                   run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command AddExplicitNode
 \* @result WorkflowResult
@@ -222,8 +217,7 @@ AddExplicitNode(g, n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command AddScriptDependency
 \* @result WorkflowResult
@@ -241,8 +235,7 @@ AddScriptDependency(n, d) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command DescribeNode
 \* @result WorkflowResult
@@ -257,8 +250,7 @@ DescribeNode(n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command SetNodeRerunDisabled
 \* @result WorkflowResult
@@ -274,9 +266,8 @@ SetNodeRerunDisabled(n) ==
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, input_contexts,
                   rerun_guidance, resumed_nodes, single_node_reruns,
-                  run_reports, package_catalog,
-                  side_effect_runtime_configured >>
-  /\ UNCHANGED provisioning_vars
+                  run_reports, package_catalog >>
+  /\ UNCHANGED environment_vars
 
 \* @command ApplyDslOverlay
 \* @result WorkflowResult
@@ -296,8 +287,7 @@ ApplyDslOverlay(g, n, d) ==
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command ResolveNode
 \* @result WorkflowResult
@@ -318,8 +308,7 @@ ResolveNode(g, n) ==
                   plan_docs, active_graphs, passed_nodes, terminal_nodes,
                   envelopes, context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command PlanGraph
 \* @result WorkflowResult
@@ -340,8 +329,7 @@ PlanGraph(g) ==
                   active_graphs, passed_nodes, terminal_nodes, envelopes,
                   context_items, run_reports, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command StartRun
 \* @result WorkflowResult
@@ -365,8 +353,7 @@ StartRun(g) ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, package_catalog,
                   rerunnable_nodes >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command ResumeRunFromBuild
 \* @result WorkflowResult
@@ -388,8 +375,7 @@ ResumeRunFromBuild(g, n) ==
                   envelopes, context_items, input_contexts,
                   rerunnable_nodes, rerun_guidance, single_node_reruns,
                   run_reports, package_catalog >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command RunOnlyNodeFromBuild
 \* @result NodeRunResult
@@ -411,8 +397,7 @@ RunOnlyNodeFromBuild(g, n) ==
                   terminal_nodes, context_items, input_contexts,
                   rerunnable_nodes, resumed_nodes, run_reports,
                   package_catalog >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command RunNodePass
 \* @result NodeRunResult
@@ -437,8 +422,7 @@ RunNodePass(g, n) ==
                   planned_graphs, plan_docs, active_graphs, run_reports,
                   package_catalog, rerunnable_nodes, resumed_nodes,
                   single_node_reruns >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command RunNodeTerminal
 \* @result NodeRunResult
@@ -464,8 +448,7 @@ RunNodeTerminal(g, n) ==
                   planned_graphs, plan_docs, passed_nodes, context_items,
                   run_reports, package_catalog, rerunnable_nodes,
                   resumed_nodes, single_node_reruns >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command WriteInlineReport
 \* @result WorkflowResult
@@ -483,8 +466,7 @@ WriteInlineReport(g) ==
                   planned_graphs, plan_docs, passed_nodes, terminal_nodes,
                   envelopes, context_items, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command RebuildReport
 \* @result WorkflowResult
@@ -500,8 +482,7 @@ RebuildReport(g) ==
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, package_catalog >>
   /\ UNCHANGED resumption_vars
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command CleanBuild
 \* @result WorkflowResult
@@ -523,8 +504,7 @@ CleanBuild ==
                   described_nodes, dsl_deps, overlays, resolved_nodes,
                   planned_graphs, plan_docs, package_catalog,
                   rerunnable_nodes >>
-  /\ UNCHANGED side_effect_vars
-  /\ UNCHANGED provisioning_vars
+  /\ UNCHANGED environment_vars
 
 \* @command ConfigureSideEffectRuntime
 \* @result WorkflowResult
@@ -540,8 +520,14 @@ ConfigureSideEffectRuntime(g) ==
                   planned_graphs, plan_docs, active_graphs, passed_nodes,
                   terminal_nodes, envelopes, context_items, input_contexts,
                   rerunnable_nodes, rerun_guidance, resumed_nodes,
-                  single_node_reruns, run_reports, package_catalog >>
-  /\ UNCHANGED provisioning_vars
+                  single_node_reruns, run_reports, package_catalog,
+                  provisioning_state_configured, feature_branches,
+                  environment_repo_configured, branch_environment_specs,
+                  provisioned_branch_environments, reused_branch_environments,
+                  reset_branch_environments, deployed_branch_environments,
+                  propagated_environment_contexts, merge_destroy_requested,
+                  destroy_authorized_environments,
+                  destroyed_branch_environments, environment_context_keys >>
 
 \* @command ConfigureProvisioningState
 \* @result WorkflowResult
@@ -557,12 +543,11 @@ ConfigureProvisioningState(g) ==
                   terminal_nodes, envelopes, context_items, input_contexts,
                   rerunnable_nodes, rerun_guidance, resumed_nodes,
                   single_node_reruns, run_reports, package_catalog,
-                  side_effect_runtime_configured,
-                  feature_branches, environment_repo_configured,
-                  branch_environment_specs,
+                  side_effect_runtime_configured, feature_branches,
+                  environment_repo_configured, branch_environment_specs,
                   provisioned_branch_environments, reused_branch_environments,
-                  reset_branch_environments, propagated_environment_contexts,
-                  merge_destroy_requested,
+                  reset_branch_environments, deployed_branch_environments,
+                  propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
                   destroyed_branch_environments, environment_context_keys >>
 
@@ -586,8 +571,8 @@ RegisterFeatureBranch(g, b) ==
                   provisioning_state_configured,
                   environment_repo_configured, branch_environment_specs,
                   provisioned_branch_environments, reused_branch_environments,
-                  reset_branch_environments, propagated_environment_contexts,
-                  merge_destroy_requested,
+                  reset_branch_environments, deployed_branch_environments,
+                  propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
                   destroyed_branch_environments, environment_context_keys >>
 
@@ -609,8 +594,8 @@ ConfigureEnvironmentRepository(g) ==
                   provisioning_state_configured, feature_branches,
                   branch_environment_specs,
                   provisioned_branch_environments, reused_branch_environments,
-                  reset_branch_environments, propagated_environment_contexts,
-                  merge_destroy_requested,
+                  reset_branch_environments, deployed_branch_environments,
+                  propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
                   destroyed_branch_environments, environment_context_keys >>
 
@@ -638,8 +623,8 @@ DeclareBranchEnvironment(g, b, target, backend) ==
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
                     provisioned_branch_environments, reused_branch_environments,
-                    reset_branch_environments, propagated_environment_contexts,
-                    merge_destroy_requested,
+                    reset_branch_environments, deployed_branch_environments,
+                    propagated_environment_contexts, merge_destroy_requested,
                     destroy_authorized_environments,
                     destroyed_branch_environments, environment_context_keys >>
 
@@ -666,8 +651,9 @@ ProvisionBranchEnvironment(g, b, target, backend) ==
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
                     branch_environment_specs, reused_branch_environments,
-                    reset_branch_environments, propagated_environment_contexts,
-                    merge_destroy_requested, destroy_authorized_environments >>
+                    reset_branch_environments, deployed_branch_environments,
+                    propagated_environment_contexts, merge_destroy_requested,
+                    destroy_authorized_environments >>
 
 \* @command ReuseBranchEnvironment
 \* @result WorkflowResult
@@ -692,9 +678,36 @@ ReuseBranchEnvironment(g, b, target, backend) ==
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
                     branch_environment_specs, provisioned_branch_environments,
-                    reset_branch_environments, propagated_environment_contexts,
-                    merge_destroy_requested, destroy_authorized_environments,
+                    reset_branch_environments, deployed_branch_environments,
+                    propagated_environment_contexts, merge_destroy_requested,
+                    destroy_authorized_environments,
                     destroyed_branch_environments >>
+
+\* @command DeployApplicationToBranchEnvironment
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.deploy_application_to_branch_environment
+DeployApplicationToBranchEnvironment(g, b, target, backend) ==
+  LET e == BranchEnvironment(g, b, target, backend)
+  IN
+    /\ e \in provisioned_branch_environments
+    /\ RequiredEnvironmentContext \subseteq environment_context_keys[e]
+    /\ deployed_branch_environments' = deployed_branch_environments \cup {e}
+    /\ reset_branch_environments' = reset_branch_environments \ {e}
+    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+    /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
+                    described_nodes, dsl_deps, overlays, resolved_nodes,
+                    planned_graphs, plan_docs, active_graphs, passed_nodes,
+                    terminal_nodes, envelopes, context_items, input_contexts,
+                    rerunnable_nodes, rerun_guidance, resumed_nodes,
+                    single_node_reruns, run_reports, package_catalog,
+                    side_effect_runtime_configured,
+                    provisioning_state_configured,
+                    feature_branches, environment_repo_configured,
+                    branch_environment_specs, provisioned_branch_environments,
+                    reused_branch_environments, merge_destroy_requested,
+                    propagated_environment_contexts,
+                    destroy_authorized_environments,
+                    destroyed_branch_environments, environment_context_keys >>
 
 \* @command PropagateEnvironmentContext
 \* @result WorkflowResult
@@ -716,8 +729,9 @@ PropagateEnvironmentContext(g, b, target, backend) ==
                     provisioning_state_configured, feature_branches,
                     environment_repo_configured, branch_environment_specs,
                     provisioned_branch_environments, reused_branch_environments,
-                    reset_branch_environments, merge_destroy_requested,
-                    destroy_authorized_environments, destroyed_branch_environments,
+                    reset_branch_environments, deployed_branch_environments,
+                    merge_destroy_requested, destroy_authorized_environments,
+                    destroyed_branch_environments,
                     environment_context_keys >>
 
 \* @command ResetBranchEnvironment
@@ -728,6 +742,7 @@ ResetBranchEnvironment(g, b, target, backend) ==
   IN
     /\ e \in provisioned_branch_environments
     /\ reset_branch_environments' = reset_branch_environments \cup {e}
+    /\ deployed_branch_environments' = deployed_branch_environments \ {e}
     /\ result' = [accepted |-> TRUE, reason |-> NoReason]
     /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                     described_nodes, dsl_deps, overlays, resolved_nodes,
@@ -738,9 +753,9 @@ ResetBranchEnvironment(g, b, target, backend) ==
                     side_effect_runtime_configured,
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
-                    branch_environment_specs,
-                    provisioned_branch_environments, reused_branch_environments,
-                    merge_destroy_requested, propagated_environment_contexts,
+                    branch_environment_specs, provisioned_branch_environments,
+                    reused_branch_environments,
+                    propagated_environment_contexts, merge_destroy_requested,
                     destroy_authorized_environments,
                     destroyed_branch_environments, environment_context_keys >>
 
@@ -763,9 +778,9 @@ RequestMergedBranchDestroy(g, b, target, backend) ==
                     side_effect_runtime_configured,
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
-                    branch_environment_specs,
-                    provisioned_branch_environments, reused_branch_environments,
-                    reset_branch_environments, propagated_environment_contexts,
+                    branch_environment_specs, provisioned_branch_environments,
+                    reused_branch_environments, reset_branch_environments,
+                    deployed_branch_environments, propagated_environment_contexts,
                     destroyed_branch_environments, environment_context_keys >>
 
 \* @command DestroyMergedBranchEnvironment
@@ -779,6 +794,7 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
     /\ provisioned_branch_environments' = provisioned_branch_environments \ {e}
     /\ reused_branch_environments' = reused_branch_environments \ {e}
     /\ reset_branch_environments' = reset_branch_environments \ {e}
+    /\ deployed_branch_environments' = deployed_branch_environments \ {e}
     /\ propagated_environment_contexts' = propagated_environment_contexts \ {e}
     /\ merge_destroy_requested' = merge_destroy_requested \ {e}
     /\ destroyed_branch_environments' = destroyed_branch_environments \cup {e}
@@ -793,8 +809,7 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
                     side_effect_runtime_configured,
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
-                    branch_environment_specs,
-                    destroy_authorized_environments >>
+                    branch_environment_specs, destroy_authorized_environments >>
 
 NoOp ==
   UNCHANGED vars
@@ -851,6 +866,9 @@ Next ==
       ReuseBranchEnvironment(g, b, target, backend)
   \/ \E g \in Graphs, b \in Branches,
         target \in EnvironmentTargets, backend \in EnvironmentBackends:
+      DeployApplicationToBranchEnvironment(g, b, target, backend)
+  \/ \E g \in Graphs, b \in Branches,
+        target \in EnvironmentTargets, backend \in EnvironmentBackends:
       PropagateEnvironmentContext(g, b, target, backend)
   \/ \E g \in Graphs, b \in Branches,
         target \in EnvironmentTargets, backend \in EnvironmentBackends:
@@ -895,6 +913,7 @@ TypeInvariant ==
   /\ provisioned_branch_environments \subseteq AllBranchEnvironments
   /\ reused_branch_environments \subseteq AllBranchEnvironments
   /\ reset_branch_environments \subseteq AllBranchEnvironments
+  /\ deployed_branch_environments \subseteq AllBranchEnvironments
   /\ propagated_environment_contexts \subseteq AllBranchEnvironments
   /\ merge_destroy_requested \subseteq AllBranchEnvironments
   /\ destroy_authorized_environments \subseteq AllBranchEnvironments
@@ -1005,6 +1024,12 @@ ReusedEnvironmentsAreProvisioned ==
 ResetKeepsBranchEnvironmentProvisioned ==
   reset_branch_environments \subseteq provisioned_branch_environments
 
+\* @invariant DeployedEnvironmentsHaveRequiredContext
+DeployedEnvironmentsHaveRequiredContext ==
+  \A e \in deployed_branch_environments:
+    /\ e \in provisioned_branch_environments
+    /\ RequiredEnvironmentContext \subseteq environment_context_keys[e]
+
 \* @invariant PropagatedEnvironmentContextRequiresProvisionedContext
 PropagatedEnvironmentContextRequiresProvisionedContext ==
   \A e \in propagated_environment_contexts:
@@ -1019,7 +1044,8 @@ MergeDestroyRequiresExplicitIntent ==
 DestroyedEnvironmentsAreNotActive ==
   destroyed_branch_environments \cap
     (provisioned_branch_environments \cup reused_branch_environments \cup
-     reset_branch_environments \cup propagated_environment_contexts) = {}
+     reset_branch_environments \cup deployed_branch_environments \cup
+     propagated_environment_contexts) = {}
 
 Spec ==
   Init /\ [][Next]_vars

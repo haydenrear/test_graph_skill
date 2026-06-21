@@ -90,6 +90,29 @@ class ProvisioningStateTest {
         assertFalse(marker.exists())
     }
 
+    @Test
+    fun awsTargetRequiresCredentials() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val state = state(
+            projectDir,
+            env = baseEnv() + mapOf("TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview"),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            state.prepare(node("environment.provision", "environment:provision"))
+        }
+
+        val credentialed = state(
+            projectDir,
+            env = baseEnv() + mapOf(
+                "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
+                "AWS_PROFILE" to "test",
+            ),
+        )
+
+        assertNotNull(credentialed.prepare(node("environment.provision", "environment:provision")))
+    }
+
     private fun state(
         projectDir: java.io.File,
         env: Map<String, String> = baseEnv(),

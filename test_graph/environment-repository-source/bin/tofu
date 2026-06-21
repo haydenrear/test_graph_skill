@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  init)
+    mkdir -p .terraform
+    ;;
+  apply)
+    mkdir -p generated
+    printf 'apiVersion: v1\nkind: Config\ncurrent-context: %s\n' "test-graph-${TF_VAR_branch:-local}" > generated/kubeconfig
+    ;;
+  output)
+    cat <<JSON
+{"EnvironmentId":{"sensitive":false,"type":"string","value":"${TF_VAR_environment_id:-unknown}"},"KUBECONFIG":{"sensitive":false,"type":"string","value":"$PWD/generated/kubeconfig"},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${TF_VAR_branch:-local}"}}
+JSON
+    ;;
+  destroy)
+    rm -rf generated .terraform
+    ;;
+  *)
+    echo "unsupported tofu command: $cmd" >&2
+    exit 64
+    ;;
+esac

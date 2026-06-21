@@ -115,11 +115,12 @@ Current registered forms:
 | `environment:reset` | Declares reset for redeploy without cluster destruction. |
 | `environment:destroy` | Declares explicit merge-gated environment destruction. |
 
-TG-5A only validates and carries this metadata. TG-5B adds framework-managed
-marker files for `environment:provision`, `environment:reset`, and
-`environment:destroy`. This still does not run an environment repository,
-OpenTofu, downstream env propagation, deployment, or cleanup beyond marker
-state.
+TG-5A validates and carries this metadata. TG-5B adds framework-managed marker
+files for `environment:provision`, `environment:reset`, and
+`environment:destroy`. TG-5E adds environment repository execution for
+provision/reuse flows and downstream `env:[KEY]` / `env:[*]` projection.
+Application deployment, reset execution, AWS provisioning, and merge destroy
+execution remain later lifecycle work.
 
 Marker state lives under `build/testgraph-provisioning-state/`:
 
@@ -134,14 +135,17 @@ Environment ids are branch-scoped:
 `<graph>__<branch>__<target>__<backend>`. The executor derives branch from
 `TEST_GRAPH_FEATURE_BRANCH`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, then
 `local`. Target defaults to `local-preview`; backend defaults to `local`.
+AWS target/backend selections fail fast unless `AWS_PROFILE`,
+`AWS_ACCESS_KEY_ID`, or `AWS_WEB_IDENTITY_TOKEN_FILE` is present.
 Destroy is refused before node execution unless
 `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
 
 ### Environment Repository Contract
 
-`environmentRepository` declares the Git repository contract a later execution
-adapter will use for branch-scoped environments. TG-5C validates and carries
-this metadata only; it does not clone Git repositories or run OpenTofu.
+`environmentRepository` declares the Git repository contract used for
+branch-scoped environments. The executor validates the metadata, clones or
+reuses the source outside the application source tree, runs the local OpenTofu
+flow for provision/reuse nodes, and publishes structured outputs into context.
 
 ```json
 {
@@ -178,13 +182,14 @@ Repository layout contract:
       outputs.tf
 ```
 
-The standard execution sequence for a later adapter is:
+The standard execution sequence is:
 
 1. Clone or reuse `source` outside the application repository.
 2. Check out the selected ref when configured.
 3. Enter `template`.
 4. Run `tofu init`.
-5. Run `tofu apply -auto-approve` for provision/reuse and reset workflows.
+5. Run `tofu apply -auto-approve` for first provision. If the branch
+   environment is already provisioned, reuse skips apply and reads outputs.
 6. Read `tofu output -json` and publish at least `EnvironmentId`,
    `KUBECONFIG`, and `KUBECONTEXT`.
 7. Run `tofu destroy -auto-approve` only for merge-time destroy when
@@ -201,6 +206,10 @@ This repository's TG-5D fixture source lives under
 `generatedEnvironmentRepositoryFixture` graph turns it into a report-local Git
 repository and publishes the path, `file://` URL, commit SHA, template path, and
 required output keys.
+
+TG-5E adds `environmentRepositoryContract`, which creates a build-local Git
+fixture, exercises init/apply/output, verifies reuse skips apply, and validates
+downstream `env:[KEY]` and `env:[*]` projection.
 
 ## Gradle DSL
 

@@ -1,0 +1,223 @@
+package com.hayden.testgraphsdk.exec
+
+import com.hayden.testgraphsdk.EnvironmentRepositorySpec
+import com.hayden.testgraphsdk.MiniJson
+import com.hayden.testgraphsdk.ValidationNodeSpec
+import java.io.File
+import java.net.URI
+import java.util.concurrent.TimeUnit
+
+internal data class EnvironmentRepositoryCommandRecord(
+    val label: String,
+    val command: List<String>,
+    val exitCode: Int,
+    val log: File,
+)
+
+internal data class EnvironmentRepositoryExecution(
+    val identity: BranchEnvironmentIdentity,
+    val repositoryDir: File,
+    val templateDir: File,
+    val reused: Boolean,
+    val commands: List<EnvironmentRepositoryCommandRecord>,
+    val outputs: Map<String, String>,
+) {
+    val environment: Map<String, String> =
+        outputs + mapOf(
+            "TEST_GRAPH_ENVIRONMENT_REPOSITORY_DIR" to repositoryDir.absolutePath,
+            "TEST_GRAPH_ENVIRONMENT_TEMPLATE_DIR" to templateDir.absolutePath,
+            "TEST_GRAPH_ENVIRONMENT_REUSED" to reused.toString(),
+        )
+
+    val publishedOutputs: Map<String, String> =
+        outputs + mapOf("EnvironmentRepositoryReused" to reused.toString())
+}
+
+internal class EnvironmentRepositoryRuntime(
+    private val projectDir: File,
+    private val reportRoot: File,
+    private val provisioningState: ProvisioningState,
+    private val env: Map<String, String> = System.getenv(),
+    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+) {
+    fun execute(
+        spec: ValidationNodeSpec,
+        prepared: PreparedProvisioningState?,
+    ): EnvironmentRepositoryExecution? {
+        val repository = spec.environmentRepository ?: return null
+        val provisioning = prepared ?: return null
+        val actions = provisioning.actions
+        if (actions.none { it in ENVIRONMENT_REPOSITORY_ACTIONS }) return null
+
+        val alreadyProvisioned = provisioningState.isProvisioned(provisioning.identity)
+        val reused = "reuse" in actions || ("provision" in actions && alreadyProvisioned)
+        if ("reuse" in actions && !alreadyProvisioned) {
+            error("node '${spec.id}' declares environment:reuse but branch environment '${provisioning.identity.id}' is not provisioned")
+        }
+
+        val commands = mutableListOf<EnvironmentRepositoryCommandRecord>()
+        val repositoryDir = cloneOrReuseRepository(spec.id, repository, provisioning.identity, commands)
+        val templateDir = File(repositoryDir, repository.template).canonicalFile
+        require(templateDir.isDirectory) {
+            "environmentRepository.template '${repository.template}' was not found in ${repositoryDir.absolutePath}"
+        }
+
+        val commandEnv = commandEnvironment(provisioning, reused)
+        val tofu = tofuBinary(repositoryDir)
+        commands += runCommand(spec.id, "tofu-init", listOf(tofu, "init"), templateDir, commandEnv)
+
+        val outputs = if ("destroy" in actions) {
+            commands += runCommand(spec.id, "tofu-destroy", listOf(tofu, "destroy", "-auto-approve"), templateDir, commandEnv)
+            emptyMap()
+        } else {
+            if (shouldApply(actions, alreadyProvisioned)) {
+                commands += runCommand(spec.id, "tofu-apply", listOf(tofu, "apply", "-auto-approve"), templateDir, commandEnv)
+            }
+            val outputRecord = runCommand(spec.id, "tofu-output", listOf(tofu, "output", "-json"), templateDir, commandEnv)
+            commands += outputRecord
+            parseOutputs(repository, outputRecord.log.readText())
+        }
+
+        return EnvironmentRepositoryExecution(
+            identity = provisioning.identity,
+            repositoryDir = repositoryDir,
+            templateDir = templateDir,
+            reused = reused,
+            commands = commands,
+            outputs = outputs,
+        )
+    }
+
+    private fun shouldApply(actions: Set<String>, alreadyProvisioned: Boolean): Boolean =
+        "reset" in actions || ("provision" in actions && !alreadyProvisioned)
+
+    private fun cloneOrReuseRepository(
+        nodeId: String,
+        repository: EnvironmentRepositorySpec,
+        identity: BranchEnvironmentIdentity,
+        commands: MutableList<EnvironmentRepositoryCommandRecord>,
+    ): File {
+        val runtimeRoot = File(projectDir, "build/testgraph-environment-repositories/${identity.id}")
+        val repositoryDir = File(runtimeRoot, "repo").canonicalFile
+        if (File(repositoryDir, ".git").isDirectory) return repositoryDir
+
+        runtimeRoot.deleteRecursively()
+        runtimeRoot.mkdirs()
+        val source = cloneSource(repository.source)
+        require(File(source).canonicalFile != repositoryDir) {
+            "environmentRepository.source must not point at the runtime clone directory"
+        }
+        commands += runCommand(
+            nodeId,
+            "git-clone",
+            listOf(gitBinary(), "clone", source, repositoryDir.absolutePath),
+            projectDir,
+            env,
+        )
+        return repositoryDir
+    }
+
+    private fun commandEnvironment(
+        provisioning: PreparedProvisioningState,
+        reused: Boolean,
+    ): Map<String, String> =
+        env + provisioning.environment + mapOf(
+            "TF_VAR_environment_id" to provisioning.identity.id,
+            "TF_VAR_branch" to provisioning.identity.branch,
+            "TEST_GRAPH_ENVIRONMENT_REUSED" to reused.toString(),
+        )
+
+    private fun parseOutputs(
+        repository: EnvironmentRepositorySpec,
+        raw: String,
+    ): Map<String, String> {
+        val root = MiniJson.obj(MiniJson.parse(raw))
+        val outputs = linkedMapOf<String, String>()
+        for (key in repository.outputKeys) {
+            val rawOutput = root[key]
+                ?: error("tofu output -json did not include required environment output '$key'")
+            outputs[key] = outputValue(rawOutput)
+                ?: error("tofu output '$key' did not include a scalar value")
+        }
+        return outputs
+    }
+
+    private fun outputValue(rawOutput: Any?): String? {
+        val obj = rawOutput as? Map<*, *>
+        val rawValue = obj?.get("value") ?: rawOutput
+        return when (rawValue) {
+            null -> null
+            is String -> rawValue
+            is Number, is Boolean -> rawValue.toString()
+            else -> rawValue.toString()
+        }
+    }
+
+    private fun tofuBinary(repositoryDir: File): String {
+        val explicit = env["TEST_GRAPH_TOFU_BIN"]?.trim()
+        if (!explicit.isNullOrEmpty()) return explicit
+        val fixtureLocal = File(repositoryDir, "bin/tofu")
+        if (fixtureLocal.canExecute()) return fixtureLocal.absolutePath
+        return "tofu"
+    }
+
+    private fun gitBinary(): String =
+        env["TEST_GRAPH_GIT_BIN"]?.trim()?.takeIf { it.isNotEmpty() } ?: "git"
+
+    private fun cloneSource(source: String): String {
+        if (source.startsWith("git@") || source.startsWith("https://") ||
+            source.startsWith("ssh://") || source.startsWith("git://")) {
+            return source
+        }
+        val file = if (source.startsWith("file:")) {
+            if (source.startsWith("file://")) File(URI(source)) else File(source.removePrefix("file:"))
+        } else {
+            File(source)
+        }
+        return if (file.isAbsolute) file.absolutePath else File(projectDir, file.path).absolutePath
+    }
+
+    private fun runCommand(
+        nodeId: String,
+        label: String,
+        argv: List<String>,
+        cwd: File,
+        environment: Map<String, String>,
+    ): EnvironmentRepositoryCommandRecord {
+        val log = logFile(nodeId, label)
+        log.parentFile.mkdirs()
+        val process = ProcessBuilder(argv)
+            .directory(cwd)
+            .redirectErrorStream(true)
+            .redirectOutput(log)
+            .also { it.environment().putAll(environment) }
+            .start()
+        val finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
+        val exitCode = if (finished) {
+            process.exitValue()
+        } else {
+            process.destroyForcibly()
+            try { process.waitFor(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
+            -1
+        }
+        val record = EnvironmentRepositoryCommandRecord(label, argv, exitCode, log)
+        if (!finished) {
+            error("environmentRepository command '$label' timed out after ${timeoutMillis}ms; see ${log.absolutePath}")
+        }
+        if (exitCode != 0) {
+            error("environmentRepository command '$label' failed with exit $exitCode; see ${log.absolutePath}")
+        }
+        return record
+    }
+
+    private fun logFile(nodeId: String, label: String): File {
+        val safeNode = nodeId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val safe = label.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return File(File(reportRoot, "environment-repository-logs"), "$safeNode.$safe.log")
+    }
+
+    companion object {
+        private const val DEFAULT_TIMEOUT_MILLIS = 5 * 60 * 1000L
+        private val ENVIRONMENT_REPOSITORY_ACTIONS = setOf("provision", "reuse", "reset", "destroy")
+    }
+}

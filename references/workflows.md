@@ -204,11 +204,23 @@ templates/<target>/
   outputs.tf
 ```
 
-Later execution adapters run `tofu init`, `tofu apply -auto-approve`, then
-`tofu output -json` inside the selected template and must publish
-`EnvironmentId`, `KUBECONFIG`, and `KUBECONTEXT`. Merge-time destroy uses the
-same template with `tofu destroy -auto-approve` and is only allowed when
-`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+Environment repository execution runs `tofu init`, runs
+`tofu apply -auto-approve` for first provision, then reads
+`tofu output -json` inside the selected template and publishes `EnvironmentId`,
+`KUBECONFIG`, and `KUBECONTEXT`. If the branch environment already has a
+provisioned marker, the runtime reuses it and skips apply. Downstream nodes can
+request those outputs as process environment variables with `env:[KEY]`, or all
+eligible context keys with `env:[*]`.
+
+In this repository, TG-5E validates that flow with:
+
+```bash
+./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
+```
+
+Merge-time destroy uses the same template with `tofu destroy -auto-approve` and
+is only allowed when `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true`; full reset,
+deploy, and destroy lifecycle wiring is later ticket work.
 
 ## Discover and Plan
 

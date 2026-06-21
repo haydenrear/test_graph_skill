@@ -30,4 +30,12 @@ validationGraph {
     testGraph("generatedEnvironmentRepositoryFixture") {
         node("sources/Tg5GeneratedEnvironmentRepositoryFixture.py")
     }
+
+    testGraph("environmentRepositoryContract") {
+        node("sources/Tg5StableEnvironmentRepositoryFixture.py")
+        node("sources/Tg5EnvironmentRepositoryProvision.py")
+        node("sources/Tg5EnvironmentContextEnvKey.py")
+        node("sources/Tg5EnvironmentContextEnvAll.py")
+        node("sources/Tg5EnvironmentRepositoryReuse.py")
+    }
 }

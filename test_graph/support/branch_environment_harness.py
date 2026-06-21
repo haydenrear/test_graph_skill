@@ -40,13 +40,35 @@ def generated_environment_repository_dir(report_dir: Path) -> Path:
     return report_dir / "generated-environment-repository"
 
 
-def copy_environment_repository_source(report_dir: Path) -> Path:
+def stable_environment_repository_dir() -> Path:
+    return REPO_ROOT / "test_graph" / "build" / "tg5-environment-repository-source"
+
+
+def environment_repository_runtime_root() -> Path:
+    return REPO_ROOT / "test_graph" / "build" / "testgraph-environment-repositories"
+
+
+def reset_environment_repository_contract_state() -> None:
+    state_root = REPO_ROOT / "test_graph" / "build" / "testgraph-provisioning-state"
+    for path in (state_root, environment_repository_runtime_root()):
+        if path.exists():
+            shutil.rmtree(path)
+
+
+def copy_environment_repository_source_to(destination: Path) -> Path:
     source = environment_repository_source_dir()
-    destination = generated_environment_repository_dir(report_dir)
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
     return destination
+
+
+def copy_environment_repository_source(report_dir: Path) -> Path:
+    return copy_environment_repository_source_to(generated_environment_repository_dir(report_dir))
+
+
+def copy_stable_environment_repository_source() -> Path:
+    return copy_environment_repository_source_to(stable_environment_repository_dir())
 
 
 def git(repo: Path, *args: str) -> str:

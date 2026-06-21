@@ -57,7 +57,13 @@ internal class ProvisioningState(
         val actions = environmentActions(spec)
         if (actions.isEmpty()) return null
 
-        val identity = identity()
+        val identity = identity(spec)
+        if (identity.requiresAwsCredentials()) {
+            require(awsCredentialsPresent()) {
+                "node '${spec.id}' selected AWS branch environment target/backend " +
+                    "(${identity.target}/${identity.backend}) but AWS credentials were not found"
+            }
+        }
         if ("destroy" in actions) {
             require(destroyRequested()) {
                 "node '${spec.id}' declares environment:destroy but TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT is not true"
@@ -118,21 +124,32 @@ internal class ProvisioningState(
         )
     }
 
+    fun isProvisioned(identity: BranchEnvironmentIdentity): Boolean =
+        markerFile("provisioned", identity.id).isFile
+
     private fun environmentActions(spec: ValidationNodeSpec): Set<String> =
         spec.sideEffectSpecs()
             .filter { it.family == "environment" }
             .mapNotNullTo(linkedSetOf()) { it.action }
 
-    private fun identity(): BranchEnvironmentIdentity =
-        BranchEnvironmentIdentity(
+    private fun identity(spec: ValidationNodeSpec): BranchEnvironmentIdentity {
+        val repository = spec.environmentRepository
+        val branchSelector = repository?.branch?.trim()
+        val branch = firstEnv("TEST_GRAPH_FEATURE_BRANCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME")
+            ?: branchSelector?.takeIf { it.isNotEmpty() && it != "feature" }
+            ?: "local"
+
+        return BranchEnvironmentIdentity(
             graph = graphName,
-            branch = firstEnv("TEST_GRAPH_FEATURE_BRANCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME")
-                ?: "local",
+            branch = branch,
             target = firstEnv("TEST_GRAPH_ENVIRONMENT_TARGET")
+                ?: repository?.target
                 ?: "local-preview",
             backend = firstEnv("TEST_GRAPH_ENVIRONMENT_BACKEND")
+                ?: repository?.backend
                 ?: "local",
         )
+    }
 
     private fun firstEnv(vararg keys: String): String? =
         keys.asSequence()
@@ -143,8 +160,17 @@ internal class ProvisioningState(
         env["TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT"]?.trim()?.lowercase() in
             setOf("1", "true", "yes", "y")
 
+    private fun awsCredentialsPresent(): Boolean =
+        firstEnv("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_WEB_IDENTITY_TOKEN_FILE") != null
+
+    private fun BranchEnvironmentIdentity.requiresAwsCredentials(): Boolean =
+        target.contains("aws", ignoreCase = true) || backend.contains("aws", ignoreCase = true)
+
     private fun marker(kind: String, name: String): File =
-        File(File(stateRoot, kind).apply { mkdirs() }, "$name.json")
+        markerFile(kind, name).also { it.parentFile.mkdirs() }
+
+    private fun markerFile(kind: String, name: String): File =
+        File(File(stateRoot, kind), "$name.json")
 
     private fun safeRunNode(spec: ValidationNodeSpec): String =
         BranchEnvironmentIdentity.safeSegment("${runId}__${spec.id}")

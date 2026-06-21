@@ -48,7 +48,13 @@ data class EnvironmentRepositorySpec(
             }
             val projectPath = projectDir.canonicalFile.toPath()
             val sourcePath = localPath.toFile().canonicalFile.toPath()
-            require(!(sourcePath != projectPath && sourcePath.startsWith(projectPath) && File(sourcePath.toFile(), ".git").isDirectory)) {
+            val buildPath = File(projectDir, "build").canonicalFile.toPath()
+            require(!(
+                sourcePath != projectPath &&
+                    sourcePath.startsWith(projectPath) &&
+                    !sourcePath.startsWith(buildPath) &&
+                    File(sourcePath.toFile(), ".git").isDirectory
+            )) {
                 "$owner.source must not be a checked-in nested Git repository under this project"
             }
         }
