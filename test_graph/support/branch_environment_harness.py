@@ -44,7 +44,29 @@ def read_json(path: Path) -> dict:
 
 
 def ticket_plan_text() -> str:
-    return (REPO_ROOT / "specs/desired_program_model/ticket_plan.yaml").read_text()
+    active = REPO_ROOT / "specs/desired_program_model/ticket_plan.yaml"
+    if active.is_file():
+        return active.read_text(encoding="utf-8")
+
+    closed = (
+        REPO_ROOT
+        / "specs/.history/branch-environment-repository-workflow/closed-snapshot/snapshots/desired_program_model/ticket_plan.yaml"
+    )
+    if closed.is_file():
+        return closed.read_text(encoding="utf-8")
+
+    latest_ticket = (
+        REPO_ROOT
+        / "specs/.history/branch-environment-repository-workflow/ticket-006-TG-5G/snapshots/desired_program_model/ticket_plan.yaml"
+    )
+    if latest_ticket.is_file():
+        return latest_ticket.read_text(encoding="utf-8")
+
+    raise FileNotFoundError("No TG-5 ticket plan found in active or closed spec workflow state.")
+
+
+def deploy_cdc_issue_body_path() -> Path:
+    return REPO_ROOT / "references" / "tickets" / "tg5-deploy-cdc-environment-repository-issue.md"
 
 
 def environment_repository_source_dir() -> Path:

@@ -25,6 +25,7 @@ validationGraph {
         node("sources/BranchEnvironmentMarkersPresent.py")
         node("sources/Tg5EnvironmentRepositoryContract.py")
         node("sources/Tg5FutureWorkflowPlan.py")
+        node("sources/Tg5DeployCdcIssueWorkflowRecord.py")
     }
 
     testGraph("generatedEnvironmentRepositoryFixture") {
@@ -53,5 +54,11 @@ validationGraph {
         node("sources/Tg5EnvironmentRepositoryDeploy.py")
         node("sources/Tg5EnvironmentRepositoryDestroy.py")
         node("sources/Tg5BranchEnvironmentDestroyMarkers.py")
+    }
+
+    testGraph("deployCdcIssueContract") {
+        node("sources/Tg5DeployCdcIssueContract.py")
+        node("sources/Tg5DeployCdcNoSdkCoupling.py")
+        node("sources/Tg5DeployCdcIssueWorkflowRecord.py")
     }
 }

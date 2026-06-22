@@ -1,29 +1,20 @@
 module: TestGraph
-package: testgraph_program_cases
+package: current_program_cases
 
 status:
-  workflow: closed
-  workflow_name: branch_environment_repository_workflow
-  initial_ticket: TG-5
-  initial_ticket_title: "Branch-scoped environment repository deployments"
-  closed_history: ../.history/branch-environment-repository-workflow/closed-snapshot
-  relation_to_program_model: accepted_program_model
-  relation_to_current: converged_and_promoted
+  workflow: ticket
+  active_ticket: TG-5
+  active_ticket_title: "Branch-scoped environment repository deployments"
+  relation_to_program_model: starts_equivalent_then_advances_as_slices_land
+  relation_to_desired_program_model: implemented_prefix_of_desired_ticket_plan
   current_model_rule: whole_program_working_copy_not_ticket_projection
   test_modeling_rule: do_not_model_tests_or_validation_harnesses_as_program_behavior
   updated: "2026-06-21"
-  summary:
-    desired_model_scaffolded: true
-    ticket_plan_scaffolded: true
-    current_model_scaffolded: true
-    generated_cases: pending
-    adapters: documented_boundaries_only
-  done:
-    - TG-5A through TG-5G implemented branch-scoped environment repository deployments and deploy-cdc follow-up issue creation.
-    - Converged desired/current model promoted back into specs/program_model.
-  accepted_slice:
-    name: TG-5
-    status: closed
+  current_slice:
+    name: TG-5G
+    status: done
+    refines:
+      - ../program_model/spec_manifest.yaml
     implemented_actions:
       - ConfigureSideEffectRuntime
       - ConfigureProvisioningState
@@ -73,8 +64,9 @@ status:
         - Merge destroy is guarded by TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT or TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT and removes provisioned/deployed state only after destroy succeeds.
         - Normal validation runs do not request merge destroy and therefore keep branch environments for reuse.
         - TG-5G created the deploy-cdc implementation issue from a tracked issue body artifact after the SDK contract and local Git fixture lifecycle were complete.
-  pending:
-    - Add executable adapter mappings for branch environment repository boundaries in a future workflow.
+  next:
+    - Reconvene for review before promoting the converged branch-environment workflow into specs/program_model.
+    - Preserve all existing specs/program_model state/actions unless production behavior changes them.
 
 source_model:
   program_model_manifest: spec_manifest.yaml

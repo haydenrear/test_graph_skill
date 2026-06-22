@@ -17,7 +17,8 @@ def test_desired_ticket_plan_splits_environment_workflow() -> None:
     assert "Create the deploy-helm repository implementation ticket" in plan
     assert "id: TG-5G" in plan and "status: done" in plan
     assert "https://github.com/haydenrear/deploy-cdc/issues/6" in plan
-    assert "deploy_cdc_environment_repository_issue.md" in plan
+    assert "references/tickets/tg5-deploy-cdc-environment-repository-issue.md" in plan
+    assert "./scripts/run.py deployCdcIssueContract --test-graph-root test_graph" in plan
     assert "test_graph/environment-repository-source/" in plan
     assert "git init/add/commit" in plan
 
@@ -57,7 +58,7 @@ def test_desired_model_contains_branch_environment_actions_and_invariants() -> N
 def test_desired_manifest_records_git_fixture_and_deploy_helm_issue_ticket() -> None:
     manifest = (SPEC_ROOT / "spec_manifest.yaml").read_text(encoding="utf-8")
     desired_state = (SPEC_ROOT / "desired_state.yaml").read_text(encoding="utf-8")
-    issue_body = (SPEC_ROOT / "deploy_cdc_environment_repository_issue.md").read_text(encoding="utf-8")
+    issue_body = (SPEC_ROOT.parents[1] / "references/tickets/tg5-deploy-cdc-environment-repository-issue.md").read_text(encoding="utf-8")
 
     assert "before a deploy-helm repository issue is created" in manifest
     assert "GeneratedGitEnvironmentRepositoryFixtureAdapter" in manifest

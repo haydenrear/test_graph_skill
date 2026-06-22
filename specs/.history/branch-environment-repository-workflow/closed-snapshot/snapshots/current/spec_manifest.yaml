@@ -40,9 +40,10 @@ status:
         - ./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
         - ./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
         - TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
+        - ./scripts/run.py deployCdcIssueContract --test-graph-root test_graph
         - ./scripts/run.py --all --test-graph-root test_graph
       issue:
-        - gh issue create --repo haydenrear/deploy-cdc --title "Add deploy-helm environment repository templates for test graph branch environments" --body-file specs/desired_program_model/deploy_cdc_environment_repository_issue.md
+        - gh issue create --repo haydenrear/deploy-cdc --title "Add deploy-helm environment repository templates for test graph branch environments" --body-file references/tickets/tg5-deploy-cdc-environment-repository-issue.md
         - https://github.com/haydenrear/deploy-cdc/issues/6
       evidence:
         - SDK side effects are parsed as typed metadata before node execution.
@@ -68,15 +69,26 @@ status:
     - Preserve all existing specs/program_model state/actions unless production behavior changes them.
 
 source_model:
-  program_model_manifest: ../program_model/spec_manifest.yaml
-  program_model_module: ../program_model/TestGraph.tla
-  desired_ticket_plan: ../desired_program_model/ticket_plan.yaml
+  program_model_manifest: spec_manifest.yaml
+  program_model_module: TestGraph.tla
+  baseline_package: testgraph_program_cases
+  issue_source: https://github.com/haydenrear/test_graph_skill/issues/5
 
 case_codegen:
   style: explicit_transition_cases
   generation_status: planned
 
 state_fields:
+  - name: input_contexts
+    purpose: Nodes whose input context snapshot exists in the build directory.
+  - name: rerunnable_nodes
+    purpose: Source nodes whose described metadata allows resume/run-only guidance.
+  - name: rerun_guidance
+    purpose: Failed nodes for which the executor/report should print a concrete rerun command.
+  - name: resumed_nodes
+    purpose: Nodes used as entrypoints for continuing a graph from an existing build directory.
+  - name: single_node_reruns
+    purpose: Nodes executed in isolation from saved build-directory input context.
   - name: side_effect_runtime_configured
     purpose: Graphs whose SDK side-effect metadata validation is available.
   - name: provisioning_state_configured
@@ -158,5 +170,20 @@ ports:
         command: DestroyMergedBranchEnvironment
         result: WorkflowResult
 adapters: case_adapters.toml
+adapter_plan:
+  desired_adapters:
+    - InputContextSnapshotAdapter
+    - ResumeRunFromBuildAdapter
+    - RunOnlyNodeFromBuildAdapter
+    - RerunGuidanceAdapter
+    - SideEffectRuntimeAdapter
+    - ProvisioningStateFileAdapter
+    - EnvironmentRepositoryContractAdapter
+    - GeneratedGitEnvironmentRepositoryFixtureAdapter
+    - EnvironmentRepositoryAdapter
+    - OpenTofuCommandAdapter
+    - DownstreamEnvProjectionAdapter
+    - BranchEnvironmentLifecycleAdapter
+  current_status: documented_boundaries_only
 notes:
   package_from_program_model: testgraph_program_cases

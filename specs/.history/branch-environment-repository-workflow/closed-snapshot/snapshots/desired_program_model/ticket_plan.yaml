@@ -394,7 +394,7 @@ tickets:
     desired_actions: []
     implementation_scope:
       - specs/desired_program_model/ticket_plan.yaml
-      - specs/desired_program_model/deploy_cdc_environment_repository_issue.md
+      - references/tickets/tg5-deploy-cdc-environment-repository-issue.md
       - deploy-helm/deploy-cdc GitHub issue body, created only after TG-5F is done
     current_increment:
       model_state: []
@@ -404,16 +404,17 @@ tickets:
       graph_after_unit_pass: []
     acceptance:
       commands:
-        - gh issue create --repo haydenrear/deploy-cdc --title "Add deploy-helm environment repository templates for test graph branch environments" --body-file specs/desired_program_model/deploy_cdc_environment_repository_issue.md
+        - gh issue create --repo haydenrear/deploy-cdc --title "Add deploy-helm environment repository templates for test graph branch environments" --body-file references/tickets/tg5-deploy-cdc-environment-repository-issue.md
       assertions:
         - The deploy-helm issue is not created until the SDK implementation and local generated Git fixture contract are complete.
         - The issue includes the finalized Git environment repository contract and required outputs.
         - The issue includes deploy-helm skill context, including k3d/k3s, registry, Helm chart, Kueue, and OpenTofu/CompuTeQ surfaces.
         - The issue asks deploy-helm to add local and AWS templates plus its own validation workflow, but the SDK remains coupled only to the Git repository contract.
       evidence:
-        - specs/desired_program_model/deploy_cdc_environment_repository_issue.md
+        - references/tickets/tg5-deploy-cdc-environment-repository-issue.md
         - https://github.com/haydenrear/deploy-cdc/issues/6
         - cd specs/current && tlc2 -config MC.cfg TestGraph.tla
         - pytest specs/program_model/tests specs/current/tests specs/desired_program_model/tests
         - cd project_sdk_sources && ./gradlew --console=plain :build-logic:test
+        - ./scripts/run.py deployCdcIssueContract --test-graph-root test_graph
         - ./scripts/run.py --all --test-graph-root test_graph

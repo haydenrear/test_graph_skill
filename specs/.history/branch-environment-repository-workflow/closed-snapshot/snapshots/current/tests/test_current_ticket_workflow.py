@@ -106,13 +106,14 @@ def test_current_manifest_records_tg5g_deploy_cdc_issue_without_new_model_action
     tla = (SPEC_ROOT / "current/TestGraph.tla").read_text(encoding="utf-8")
     manifest = (SPEC_ROOT / "current/spec_manifest.yaml").read_text(encoding="utf-8")
     plan = (SPEC_ROOT / "desired_program_model/ticket_plan.yaml").read_text(encoding="utf-8")
-    issue_body = (SPEC_ROOT / "desired_program_model/deploy_cdc_environment_repository_issue.md").read_text(encoding="utf-8")
+    issue_body = (SPEC_ROOT.parent / "references/tickets/tg5-deploy-cdc-environment-repository-issue.md").read_text(encoding="utf-8")
 
     assert "name: TG-5G" in manifest
     assert "https://github.com/haydenrear/deploy-cdc/issues/6" in manifest
     assert "status: done" in plan
-    assert "specs/desired_program_model/deploy_cdc_environment_repository_issue.md" in plan
+    assert "references/tickets/tg5-deploy-cdc-environment-repository-issue.md" in plan
     assert "https://github.com/haydenrear/deploy-cdc/issues/6" in plan
+    assert "./scripts/run.py deployCdcIssueContract --test-graph-root test_graph" in plan
     assert "Add deploy-helm environment repository templates for test graph branch environments" in issue_body
     assert "@command CreateDeployHelmIssue" not in tla
     assert "deploy_cdc_environment_repository_issue" not in tla
