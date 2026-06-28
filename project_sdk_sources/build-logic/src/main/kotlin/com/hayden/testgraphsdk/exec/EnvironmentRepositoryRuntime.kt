@@ -12,6 +12,7 @@ internal data class EnvironmentRepositoryCommandRecord(
     val command: List<String>,
     val exitCode: Int,
     val log: File,
+    val stderrLog: File? = null,
 )
 
 internal data class EnvironmentRepositoryExecution(
@@ -78,7 +79,14 @@ internal class EnvironmentRepositoryRuntime(
             if (shouldApply(actions, alreadyProvisioned)) {
                 commands += runCommand(spec.id, "tofu-apply", listOf(tofu, "apply", "-auto-approve"), templateDir, commandEnv)
             }
-            val outputRecord = runCommand(spec.id, "tofu-output", listOf(tofu, "output", "-json"), templateDir, commandEnv)
+            val outputRecord = runCommand(
+                spec.id,
+                "tofu-output",
+                listOf(tofu, "output", "-json"),
+                templateDir,
+                commandEnv,
+                separateOutput = true,
+            )
             commands += outputRecord
             parseOutputs(repository, outputRecord.log.readText())
         }
@@ -104,11 +112,27 @@ internal class EnvironmentRepositoryRuntime(
     ): File {
         val runtimeRoot = File(projectDir, "build/testgraph-environment-repositories/${identity.id}")
         val repositoryDir = File(runtimeRoot, "repo").canonicalFile
-        if (File(repositoryDir, ".git").isDirectory) return repositoryDir
+        val source = cloneSource(repository.source)
+        if (File(repositoryDir, ".git").isDirectory) {
+            val originRecord = runCommand(
+                nodeId,
+                "git-origin",
+                listOf(gitBinary(), "config", "--get", "remote.origin.url"),
+                repositoryDir,
+                env,
+                separateOutput = true,
+                checkExitCode = false,
+            )
+            commands += originRecord
+            if (originRecord.exitCode == 0 && originRecord.log.readText().trim() == source) {
+                refreshRepository(nodeId, repositoryDir, commands)
+                return repositoryDir
+            }
+            runtimeRoot.deleteRecursively()
+        }
 
         runtimeRoot.deleteRecursively()
         runtimeRoot.mkdirs()
-        val source = cloneSource(repository.source)
         require(File(source).canonicalFile != repositoryDir) {
             "environmentRepository.source must not point at the runtime clone directory"
         }
@@ -120,6 +144,38 @@ internal class EnvironmentRepositoryRuntime(
             env,
         )
         return repositoryDir
+    }
+
+    private fun refreshRepository(
+        nodeId: String,
+        repositoryDir: File,
+        commands: MutableList<EnvironmentRepositoryCommandRecord>,
+    ) {
+        commands += runCommand(
+            nodeId,
+            "git-fetch",
+            listOf(gitBinary(), "fetch", "--prune", "origin"),
+            repositoryDir,
+            env,
+        )
+        val branchRecord = runCommand(
+            nodeId,
+            "git-current-branch",
+            listOf(gitBinary(), "rev-parse", "--abbrev-ref", "HEAD"),
+            repositoryDir,
+            env,
+            separateOutput = true,
+        )
+        commands += branchRecord
+        val branch = branchRecord.log.readText().trim().takeIf { it.isNotEmpty() && it != "HEAD" } ?: "HEAD"
+        val resetTarget = if (branch == "HEAD") "origin/HEAD" else "origin/$branch"
+        commands += runCommand(
+            nodeId,
+            "git-reset",
+            listOf(gitBinary(), "reset", "--hard", resetTarget),
+            repositoryDir,
+            env,
+        )
     }
 
     private fun commandEnvironment(
@@ -190,15 +246,20 @@ internal class EnvironmentRepositoryRuntime(
         argv: List<String>,
         cwd: File,
         environment: Map<String, String>,
+        separateOutput: Boolean = false,
+        checkExitCode: Boolean = true,
     ): EnvironmentRepositoryCommandRecord {
-        val log = logFile(nodeId, label)
+        val log = logFile(nodeId, if (separateOutput) "$label.stdout" else label)
+        val stderrLog = if (separateOutput) logFile(nodeId, "$label.stderr") else null
         log.parentFile.mkdirs()
-        val process = ProcessBuilder(argv)
+        stderrLog?.parentFile?.mkdirs()
+        val builder = ProcessBuilder(argv)
             .directory(cwd)
-            .redirectErrorStream(true)
+            .redirectErrorStream(!separateOutput)
             .redirectOutput(log)
             .also { it.environment().putAll(environment) }
-            .start()
+        if (stderrLog != null) builder.redirectError(stderrLog)
+        val process = builder.start()
         val finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
         val exitCode = if (finished) {
             process.exitValue()
@@ -207,15 +268,22 @@ internal class EnvironmentRepositoryRuntime(
             try { process.waitFor(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
             -1
         }
-        val record = EnvironmentRepositoryCommandRecord(label, argv, exitCode, log)
+        val record = EnvironmentRepositoryCommandRecord(label, argv, exitCode, log, stderrLog)
         if (!finished) {
-            error("environmentRepository command '$label' timed out after ${timeoutMillis}ms; see ${log.absolutePath}")
+            error("environmentRepository command '$label' timed out after ${timeoutMillis}ms; see ${commandLogReference(record)}")
         }
-        if (exitCode != 0) {
-            error("environmentRepository command '$label' failed with exit $exitCode; see ${log.absolutePath}")
+        if (checkExitCode && exitCode != 0) {
+            error("environmentRepository command '$label' failed with exit $exitCode; see ${commandLogReference(record)}")
         }
         return record
     }
+
+    private fun commandLogReference(record: EnvironmentRepositoryCommandRecord): String =
+        if (record.stderrLog == null) {
+            record.log.absolutePath
+        } else {
+            "${record.log.absolutePath} and ${record.stderrLog.absolutePath}"
+        }
 
     private fun logFile(nodeId: String, label: String): File {
         val safeNode = nodeId.replace(Regex("[^A-Za-z0-9._-]"), "_")

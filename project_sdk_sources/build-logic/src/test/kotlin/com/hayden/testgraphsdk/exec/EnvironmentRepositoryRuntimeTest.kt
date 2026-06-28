@@ -113,6 +113,62 @@ class EnvironmentRepositoryRuntimeTest {
         assertTrue(error.message.orEmpty().contains("tofu output 'KUBECONFIG' did not include a scalar value"))
     }
 
+    @Test
+    fun parsesOpenTofuJsonFromStdoutWhenStderrHasWarnings() {
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-stderr").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val source = createEnvironmentRepository(projectDir, outputWarnsOnStderr = true)
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryContract",
+            runId = "run-1",
+            env = mapOf("TEST_GRAPH_FEATURE_BRANCH" to "feature-a"),
+        )
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+        val provision = node("environment.provision", source)
+
+        val execution = runtime.execute(provision, state.prepare(provision))
+            ?: error("expected environment repository execution")
+        val outputCommand = execution.commands.single { it.label == "tofu-output" }
+
+        assertEquals("test-graph-feature-a", execution.outputs["KUBECONTEXT"])
+        assertTrue(outputCommand.log.readText().trimStart().startsWith("{"))
+        assertTrue(outputCommand.stderrLog?.readText().orEmpty().contains("warning: noisy provider"))
+    }
+
+    @Test
+    fun refreshesCachedCloneBeforeReuse() {
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-refresh").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val source = createEnvironmentRepository(projectDir)
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryContract",
+            runId = "run-1",
+            env = mapOf("TEST_GRAPH_FEATURE_BRANCH" to "feature-a"),
+        )
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+        val provision = node("environment.provision", source)
+        val prepared = state.prepare(provision)
+        val first = runtime.execute(provision, prepared)
+            ?: error("expected environment repository execution")
+        state.recordSuccessful(provision, prepared, "passed")
+
+        assertEquals("test-graph-feature-a", first.outputs["KUBECONTEXT"])
+
+        writeTofuFixture(source, kubecontextPrefix = "updated")
+        git(source, "add", "bin/tofu")
+        git(source, "commit", "-m", "Update output prefix")
+
+        val reuse = node("environment.reuse", source)
+        val second = runtime.execute(reuse, state.prepare(reuse))
+            ?: error("expected environment repository reuse")
+
+        assertTrue(second.commands.any { it.label == "git-fetch" })
+        assertTrue(second.commands.any { it.label == "git-reset" })
+        assertEquals("updated-feature-a", second.outputs["KUBECONTEXT"])
+    }
+
     private fun node(
         id: String,
         source: File,
@@ -130,16 +186,40 @@ class EnvironmentRepositoryRuntimeTest {
             environmentRepository = repository,
         )
 
-    private fun createEnvironmentRepository(projectDir: File, compositeKubeconfig: Boolean = false): File {
+    private fun createEnvironmentRepository(
+        projectDir: File,
+        compositeKubeconfig: Boolean = false,
+        outputWarnsOnStderr: Boolean = false,
+    ): File {
         val repo = File(projectDir, "build/generated-env-source").apply { mkdirs() }
         File(repo, "templates/local-preview").mkdirs()
         File(repo, "templates/local-preview/main.tf").writeText("terraform {}\n")
         File(repo, "templates/local-preview/variables.tf").writeText("variable \"environment_id\" { type = string }\n")
         File(repo, "templates/local-preview/outputs.tf").writeText("output \"EnvironmentId\" { value = var.environment_id }\n")
+        writeTofuFixture(repo, compositeKubeconfig, outputWarnsOnStderr)
+        git(repo, "init")
+        git(repo, "config", "user.email", "test-graph@example.invalid")
+        git(repo, "config", "user.name", "Test Graph")
+        git(repo, "add", ".")
+        git(repo, "commit", "-m", "Initial environment")
+        return repo
+    }
+
+    private fun writeTofuFixture(
+        repo: File,
+        compositeKubeconfig: Boolean = false,
+        outputWarnsOnStderr: Boolean = false,
+        kubecontextPrefix: String = "test-graph",
+    ) {
         val kubeconfigOutput = if (compositeKubeconfig) {
             """["${'$'}PWD/generated/kubeconfig"]"""
         } else {
             "\"${'$'}PWD/generated/kubeconfig\""
+        }
+        val stderrWarning = if (outputWarnsOnStderr) {
+            "printf 'warning: noisy provider\\n' >&2"
+        } else {
+            ":"
         }
         val tofu = File(repo, "bin/tofu").apply {
             parentFile.mkdirs()
@@ -158,8 +238,9 @@ class EnvironmentRepositoryRuntimeTest {
                     printf 'kubeconfig for %s\n' "${'$'}TF_VAR_environment_id" > generated/kubeconfig
                     ;;
                   output)
+                    $stderrWarning
                     cat <<JSON
-                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":${kubeconfigOutput}},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${'$'}TF_VAR_branch"},"TARGET":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_target"},"BACKEND":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_backend"}}
+                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":${kubeconfigOutput}},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"$kubecontextPrefix-${'$'}TF_VAR_branch"},"TARGET":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_target"},"BACKEND":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_backend"}}
                 JSON
                     ;;
                   destroy)
@@ -174,12 +255,6 @@ class EnvironmentRepositoryRuntimeTest {
             setExecutable(true)
         }
         check(tofu.canExecute())
-        git(repo, "init")
-        git(repo, "config", "user.email", "test-graph@example.invalid")
-        git(repo, "config", "user.name", "Test Graph")
-        git(repo, "add", ".")
-        git(repo, "commit", "-m", "Initial environment")
-        return repo
     }
 
     private fun git(repo: File, vararg args: String) {

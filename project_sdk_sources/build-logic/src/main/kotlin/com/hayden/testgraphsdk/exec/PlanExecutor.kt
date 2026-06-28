@@ -602,6 +602,9 @@ class PlanExecutor(
                 appendJsonArray(command.command)
                 append(",\"exitCode\":").append(command.exitCode)
                 append(",\"log\":").append(jsonString(relativeToReport(reportRoot, command.log)))
+                command.stderrLog?.let {
+                    append(",\"stderrLog\":").append(jsonString(relativeToReport(reportRoot, it)))
+                }
                 append("}")
             }
             append("]}")
