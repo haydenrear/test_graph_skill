@@ -83,6 +83,11 @@ def stable_environment_repository_dir() -> Path:
     return REPO_ROOT / "test_graph" / "build" / "tg5-environment-repository-source"
 
 
+def scaffolded_environment_repository_dir(target: str = "local-preview") -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in target).strip(".-_") or "target"
+    return REPO_ROOT / "test_graph" / "build" / f"tg6-environment-repository-{safe}"
+
+
 def environment_repository_runtime_root() -> Path:
     return REPO_ROOT / "test_graph" / "build" / "testgraph-environment-repositories"
 
@@ -110,6 +115,43 @@ def copy_stable_environment_repository_source() -> Path:
     return copy_environment_repository_source_to(stable_environment_repository_dir())
 
 
+def scaffold_environment_repository(
+    destination: Path,
+    *,
+    targets: list[str],
+    include_tofu_shim: bool = False,
+) -> Path:
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    script = REPO_ROOT / "scripts" / "scaffold-tf-env.py"
+    first, *rest = targets
+    args = [str(script), str(destination), "--target", first]
+    if include_tofu_shim:
+        args.append("--include-tofu-shim")
+    run(args, cwd=REPO_ROOT)
+    add_script = REPO_ROOT / "scripts" / "scaffold-env.py"
+    for target in rest:
+        run([str(add_script), str(destination), "--target", target], cwd=REPO_ROOT)
+    return destination
+
+
+def run(args: list[str], *, cwd: Path) -> str:
+    completed = subprocess.run(
+        args,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"{' '.join(args)} failed with exit {completed.returncode}: {completed.stderr.strip()}"
+        )
+    return completed.stdout.strip()
+
+
 def git(repo: Path, *args: str) -> str:
     completed = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -134,11 +176,15 @@ def init_environment_repository(repo: Path) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def local_preview_output_keys(repo: Path) -> set[str]:
-    outputs = repo / "templates" / "local-preview" / "outputs.tf"
+def environment_output_keys(repo: Path, template: str = "templates/local-preview") -> set[str]:
+    outputs = repo / template / "outputs.tf"
     text = outputs.read_text(encoding="utf-8")
     return {
         key
         for key in ("EnvironmentId", "KUBECONFIG", "KUBECONTEXT")
         if f'output "{key}"' in text
     }
+
+
+def local_preview_output_keys(repo: Path) -> set[str]:
+    return environment_output_keys(repo)

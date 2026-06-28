@@ -129,6 +129,8 @@ internal class EnvironmentRepositoryRuntime(
         env + provisioning.environment + mapOf(
             "TF_VAR_environment_id" to provisioning.identity.id,
             "TF_VAR_branch" to provisioning.identity.branch,
+            "TF_VAR_target" to provisioning.identity.target,
+            "TF_VAR_backend" to provisioning.identity.backend,
             "TEST_GRAPH_ENVIRONMENT_REUSED" to reused.toString(),
         )
 

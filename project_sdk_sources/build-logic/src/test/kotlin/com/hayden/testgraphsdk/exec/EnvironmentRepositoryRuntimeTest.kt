@@ -61,20 +61,52 @@ class EnvironmentRepositoryRuntimeTest {
         assertTrue(resetExecution.commands.any { it.label == "tofu-apply" })
     }
 
+    @Test
+    fun passesTargetAndBackendToOpenTofuVariables() {
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-target").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val source = createEnvironmentRepository(projectDir)
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryContract",
+            runId = "run-1",
+            env = mapOf("TEST_GRAPH_FEATURE_BRANCH" to "feature-a"),
+        )
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+
+        val provision = node(
+            "environment.provision.github",
+            source,
+            repository = EnvironmentRepositorySpec(
+                source = source.absolutePath,
+                template = "templates/local-preview",
+                target = "local-github-action",
+                backend = "github-action",
+                outputKeys = setOf("EnvironmentId", "KUBECONFIG", "KUBECONTEXT", "TARGET", "BACKEND"),
+            ),
+        )
+        val execution = runtime.execute(provision, state.prepare(provision))
+            ?: error("expected environment repository execution")
+
+        assertEquals("local-github-action", execution.outputs["TARGET"])
+        assertEquals("github-action", execution.outputs["BACKEND"])
+    }
+
     private fun node(
         id: String,
         source: File,
         sideEffect: String = "environment:provision",
+        repository: EnvironmentRepositorySpec = EnvironmentRepositorySpec(
+            source = source.absolutePath,
+            template = "templates/local-preview",
+        ),
     ): ValidationNodeSpec =
         ValidationNodeSpec(
             id = id,
             kind = NodeKind.ACTION,
             runtime = ValidationRuntime.Uv("sources/$id.py"),
             sideEffects = setOf(sideEffect),
-            environmentRepository = EnvironmentRepositorySpec(
-                source = source.absolutePath,
-                template = "templates/local-preview",
-            ),
+            environmentRepository = repository,
         )
 
     private fun createEnvironmentRepository(projectDir: File): File {
@@ -101,7 +133,7 @@ class EnvironmentRepositoryRuntimeTest {
                     ;;
                   output)
                     cat <<JSON
-                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":"${'$'}PWD/generated/kubeconfig"},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${'$'}TF_VAR_branch"}}
+                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":"${'$'}PWD/generated/kubeconfig"},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${'$'}TF_VAR_branch"},"TARGET":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_target"},"BACKEND":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_backend"}}
                 JSON
                     ;;
                   destroy)

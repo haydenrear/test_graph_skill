@@ -169,7 +169,7 @@ node process exit code.
 
 ## Scaffold Scripts
 
-TG-6B introduces two scaffold scripts:
+Use these scripts to create or extend an environment repository:
 
 ```bash
 scripts/scaffold-tf-env.py <environment-repo-dir>
@@ -180,5 +180,14 @@ scripts/scaffold-env.py <environment-repo-dir> --target aws-preview
 
 `scaffold-tf-env.py` creates the environment repository skeleton with starter
 OpenTofu files. `scaffold-env.py` adds an environment template to an existing
-environment repository. Both scripts must be validated through test graph
-fixtures that initialize a temporary Git repository during the run.
+environment repository. The default template path is
+`templates/branch-preview`; target-specific files coexist there as `local.tf`,
+`local-github-action.tf`, and `aws.tf`.
+
+For local validation graphs only, pass `--include-tofu-shim` to add a
+repository-local `bin/tofu` shim. Normal environment repositories should replace
+the starter HCL with real provider modules and rely on the system OpenTofu
+binary.
+
+Both scripts are validated through test graph fixtures that initialize a
+temporary Git repository during the run.

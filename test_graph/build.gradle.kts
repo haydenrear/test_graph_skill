@@ -65,4 +65,20 @@ validationGraph {
     testGraph("environmentRepositoryDocumentation") {
         node("sources/Tg6EnvironmentRepositoryDocumentation.py")
     }
+
+    testGraph("environmentRepositoryScaffoldLocal") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldLocal.py")
+        node("sources/Tg6EnvironmentRepositoryProvision.py")
+        node("sources/Tg6EnvironmentContextEnvKey.py")
+        node("sources/Tg6EnvironmentContextEnvAll.py")
+        node("sources/Tg6EnvironmentRepositoryReuse.py")
+    }
+
+    testGraph("environmentRepositoryScaffoldGithubAction") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldGithubAction.py")
+    }
+
+    testGraph("environmentRepositoryScaffoldAws") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldAws.py")
+    }
 }
