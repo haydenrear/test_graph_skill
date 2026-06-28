@@ -144,9 +144,12 @@ Destroy is refused before node execution unless
 ### Environment Repository Contract
 
 `environmentRepository` declares the Git repository contract used for
-branch-scoped environments. The executor validates the metadata, clones or
-reuses the source outside the application source tree, runs the local OpenTofu
-flow for provision/reuse nodes, and publishes structured outputs into context.
+branch-scoped environments. The authoritative contract, repository form,
+Git fixture policy, local k3d setup, lifecycle semantics, and required
+local/GitHub Actions/AWS graph coverage live in
+[`environment-repositories.md`](environment-repositories.md).
+
+The dense API shape is:
 
 ```json
 {
@@ -161,65 +164,17 @@ flow for provision/reuse nodes, and publishes structured outputs into context.
 }
 ```
 
-Fields:
+The executor validates this metadata, clones or reuses the source outside the
+application tree, runs the OpenTofu lifecycle inside the selected template, and
+publishes structured environment outputs into downstream context. Existing TG-5
+validation graphs remain:
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `source` | yes | Ordinary Git URL or local Git repository path. Accepted examples include `git@...`, `https://...`, `ssh://...`, `git://...`, `file:///tmp/env-repo`, and local paths. Archive and tarball sources are rejected. |
-| `template` | yes | Relative directory inside the environment repo, such as `templates/local-preview`. Absolute paths, empty path segments, `.`, and `..` are rejected. |
-| `target` | no | Logical environment target. Defaults to `local-preview`; AWS variants are explicit later tickets. |
-| `backend` | no | Execution backend. Defaults to `local`. |
-| `branch` | no | Branch scope selector. Defaults to `feature`, meaning the runtime feature branch resolved from `TEST_GRAPH_FEATURE_BRANCH`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, then `local`. |
-| `outputKeys` | no | Structured keys returned by the environment repository. Must include `EnvironmentId`, `KUBECONFIG`, and `KUBECONTEXT`. |
-
-Repository layout contract:
-
-```text
-<environment-repo>/
-  templates/
-    local-preview/
-      main.tf
-      variables.tf
-      outputs.tf
+```bash
+./scripts/run.py generatedEnvironmentRepositoryFixture --test-graph-root test_graph
+./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
+./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
+TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
 ```
-
-The standard execution sequence is:
-
-1. Clone or reuse `source` outside the application repository.
-2. Check out the selected ref when configured.
-3. Enter `template`.
-4. Run `tofu init`.
-5. Run `tofu apply -auto-approve` for first provision and reset. If the branch
-   environment is already provisioned, reuse/deploy skips apply and reads
-   outputs.
-6. Read `tofu output -json` and publish at least `EnvironmentId`,
-   `KUBECONFIG`, and `KUBECONTEXT`.
-7. Run `tofu destroy -auto-approve` only for merge-time destroy when
-   explicit destroy intent is present.
-
-Contract tests must not check in a nested Git repository or use a tarball as
-the primary fixture. Version ordinary source/template files, then create a real
-temporary Git repository with `git init`, `git add`, and `git commit` during
-the test that needs one. The SDK contract is deploy-helm neutral; deploy-helm
-is one future environment repository implementation, not a dependency here.
-
-This repository's TG-5D fixture source lives under
-`test_graph/environment-repository-source/`; the
-`generatedEnvironmentRepositoryFixture` graph turns it into a report-local Git
-repository and publishes the path, `file://` URL, commit SHA, template path, and
-required output keys.
-
-TG-5E adds `environmentRepositoryContract`, which creates a build-local Git
-fixture, exercises init/apply/output, verifies reuse skips apply, and validates
-downstream `env:[KEY]` and `env:[*]` projection.
-
-TG-5F adds `branchEnvironmentReset` and `branchEnvironmentMergeDestroy`.
-`branchEnvironmentReset` deploys a fake application marker into the preview
-environment, reruns apply through `environment:reset`, verifies application
-state is cleared, and keeps the provisioned marker. `branchEnvironmentMergeDestroy`
-is safe during normal `run.py --all`; it only declares `environment:destroy`
-when explicit destroy intent is present and then verifies provisioned/deployed
-markers are removed after `tofu destroy` succeeds.
 
 ## Gradle DSL
 

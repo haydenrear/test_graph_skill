@@ -170,7 +170,11 @@ dependencies.
 ## Branch Environment Repository Contracts
 
 For branch-scoped environments, node metadata can declare an
-`environmentRepository` contract:
+`environmentRepository` contract. Read
+[`environment-repositories.md`](environment-repositories.md) for the
+authoritative repository form, Git fixture policy, local k3d setup,
+target/backend semantics, lifecycle behavior, and required test graph coverage
+for local, GitHub Actions, and AWS targets.
 
 ```python
 NodeSpec("preview.provision") \
@@ -182,52 +186,14 @@ NodeSpec("preview.provision") \
             "templates/local-preview"))
 ```
 
-The source must be an ordinary Git URL or local Git repository path. Do not
-commit a nested `.git` directory under the application repository, and do not
-use a tarball/zip as the primary fixture. For local contract tests, version the
-template source files as ordinary files, create a temporary repository during
-the test with `git init`, `git add`, and `git commit`, then point the SDK at
-that temporary repository path or `file://` URL.
-
-In this repository, TG-5D keeps those source files under
-`test_graph/environment-repository-source/` and validates repository generation
-with:
+Existing validation entry points:
 
 ```bash
 ./scripts/run.py generatedEnvironmentRepositoryFixture --test-graph-root test_graph
-```
-
-The environment repository layout is provider-neutral:
-
-```text
-templates/<target>/
-  main.tf
-  variables.tf
-  outputs.tf
-```
-
-Environment repository execution runs `tofu init`, runs
-`tofu apply -auto-approve` for first provision or reset, then reads
-`tofu output -json` inside the selected template and publishes `EnvironmentId`,
-`KUBECONFIG`, and `KUBECONTEXT`. If the branch environment already has a
-provisioned marker, reuse and deploy nodes skip apply and read outputs.
-Downstream nodes can request those outputs as process environment variables
-with `env:[KEY]`, or all eligible context keys with `env:[*]`.
-
-In this repository, TG-5E validates that flow with:
-
-```bash
 ./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
-```
-
-Merge-time destroy uses the same template with `tofu destroy -auto-approve` and
-is only allowed when explicit destroy intent is present. Normal all-graph runs
-do not request destroy, so the guarded merge-destroy graph verifies that the
-environment remains active by default. Run the destructive path explicitly:
-
-```bash
 ./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
 TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
+./scripts/run.py environmentRepositoryDocumentation --test-graph-root test_graph
 ```
 
 ## Discover and Plan

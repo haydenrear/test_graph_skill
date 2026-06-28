@@ -61,4 +61,8 @@ validationGraph {
         node("sources/Tg5DeployCdcNoSdkCoupling.py")
         node("sources/Tg5DeployCdcIssueWorkflowRecord.py")
     }
+
+    testGraph("environmentRepositoryDocumentation") {
+        node("sources/Tg6EnvironmentRepositoryDocumentation.py")
+    }
 }
