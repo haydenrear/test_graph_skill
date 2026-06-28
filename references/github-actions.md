@@ -133,3 +133,25 @@ and fails early if the secret is missing.
 The generated setup assumes a macOS runner because it installs
 `skill-manager`, JBang, and Python through Homebrew, matching the current
 known-good CI path.
+
+## Environment Repository Graphs
+
+Environment repository validation is safe for default GitHub Actions runs:
+
+- `environmentRepositoryGithubActionLifecycle` exercises the
+  `local-github-action` target/backend with the repository-local OpenTofu shim.
+  It provisions a missing branch environment, proves existing-environment
+  reuse does not recreate it, resets deployment state, and keeps the
+  environment active by default.
+- `environmentRepositoryGithubActionLifecycleDestroy` proves destroy is
+  guarded unless `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` is present.
+- `environmentRepositoryAwsLifecycle` and
+  `environmentRepositoryAwsLifecycleDestroy` are discoverable in normal CI but
+  do not create AWS resources unless `TEST_GRAPH_RUN_AWS_LIFECYCLE=true` and
+  AWS credentials are present. Destroy additionally requires
+  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+  `TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+
+Do not set the AWS opt-in variables in broad pull-request CI unless the runner,
+credentials, account limits, and teardown policy are intentionally configured
+for preview infrastructure.

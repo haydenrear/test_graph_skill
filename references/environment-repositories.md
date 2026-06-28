@@ -177,6 +177,37 @@ Current local validation graphs:
   destroy intent it proves no destroy runtime is invoked; with
   `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` it validates `tofu destroy`,
   destroy-requested markers, destroyed markers, and provisioned marker removal.
+- `environmentRepositoryGithubActionLifecycle` runs the same missing deploy,
+  existing reuse, reset, and skip-destroy checks against the
+  `local-github-action` target/backend. It uses the scaffolded environment
+  repository shim, so it is safe for CI and does not create cloud resources.
+- `environmentRepositoryGithubActionLifecycleDestroy` validates the
+  `local-github-action` destroy guard. Run it normally to prove destroy is not
+  invoked by default, and run it with
+  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` to prove explicit teardown
+  writes destroy-requested/destroyed markers and removes the active marker.
+- `environmentRepositoryAwsLifecycle` is discoverable and safe in normal CI.
+  Without `TEST_GRAPH_RUN_AWS_LIFECYCLE=true` and AWS credentials, it records
+  guarded no-op lifecycle assertions and verifies no environment repository
+  provision/deploy/reset runtime was invoked. With explicit selection and
+  credentials, it runs the missing deploy, existing reuse, reset, and
+  skip-destroy checks against `aws-preview`/`aws`.
+- `environmentRepositoryAwsLifecycleDestroy` applies the same AWS guard to
+  teardown. Destroy only declares an `environment:destroy` side effect when AWS
+  lifecycle execution is explicitly selected, AWS credentials are present, and
+  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+  `TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true` is set.
+
+AWS validation opt-in examples:
+
+```bash
+TEST_GRAPH_RUN_AWS_LIFECYCLE=true AWS_PROFILE=preview \
+  ./scripts/run.py environmentRepositoryAwsLifecycle --test-graph-root test_graph
+
+TEST_GRAPH_RUN_AWS_LIFECYCLE=true AWS_PROFILE=preview \
+  TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true \
+  ./scripts/run.py environmentRepositoryAwsLifecycleDestroy --test-graph-root test_graph
+```
 
 ## Scaffold Scripts
 

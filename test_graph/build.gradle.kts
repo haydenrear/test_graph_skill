@@ -116,4 +116,52 @@ validationGraph {
         node("sources/Tg6LocalLifecycleDestroy.py")
         node("sources/Tg6LocalLifecycleDestroyMarkers.py")
     }
+
+    testGraph("environmentRepositoryGithubActionLifecycle") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldGithubAction.py")
+        node("sources/Tg6GithubActionLifecycleProvisionMissing.py")
+        node("sources/Tg6GithubActionLifecycleContextJbang.java")
+        node("sources/Tg6GithubActionLifecycleDeployExisting.py")
+        node("sources/Tg6GithubActionLifecycleDeployMarkers.py")
+        node("sources/Tg6GithubActionLifecycleReset.py")
+        node("sources/Tg6GithubActionLifecycleResetMarkers.py")
+        node("sources/Tg6GithubActionLifecycleSkipDestroy.py")
+    }
+
+    testGraph("environmentRepositoryGithubActionLifecycleDestroy") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldGithubAction.py")
+        node("sources/Tg6GithubActionLifecycleProvisionMissing.py")
+        node("sources/Tg6GithubActionLifecycleContextJbang.java")
+        node("sources/Tg6GithubActionLifecycleDeployExisting.py")
+        node("sources/Tg6GithubActionLifecycleDeployMarkers.py")
+        node("sources/Tg6GithubActionLifecycleReset.py")
+        node("sources/Tg6GithubActionLifecycleResetMarkers.py")
+        node("sources/Tg6GithubActionLifecycleDestroy.py")
+        node("sources/Tg6GithubActionLifecycleDestroyMarkers.py")
+    }
+
+    testGraph("environmentRepositoryAwsLifecycle") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldAws.py")
+        node("sources/Tg6AwsLifecycleGuard.py")
+        node("sources/Tg6AwsLifecycleProvisionMissing.py")
+        node("sources/Tg6AwsLifecycleContextJbang.java")
+        node("sources/Tg6AwsLifecycleDeployExisting.py")
+        node("sources/Tg6AwsLifecycleDeployMarkers.py")
+        node("sources/Tg6AwsLifecycleReset.py")
+        node("sources/Tg6AwsLifecycleResetMarkers.py")
+        node("sources/Tg6AwsLifecycleSkipDestroy.py")
+    }
+
+    testGraph("environmentRepositoryAwsLifecycleDestroy") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldAws.py")
+        node("sources/Tg6AwsLifecycleGuard.py")
+        node("sources/Tg6AwsLifecycleProvisionMissing.py")
+        node("sources/Tg6AwsLifecycleContextJbang.java")
+        node("sources/Tg6AwsLifecycleDeployExisting.py")
+        node("sources/Tg6AwsLifecycleDeployMarkers.py")
+        node("sources/Tg6AwsLifecycleReset.py")
+        node("sources/Tg6AwsLifecycleResetMarkers.py")
+        node("sources/Tg6AwsLifecycleDestroy.py")
+        node("sources/Tg6AwsLifecycleDestroyMarkers.py")
+    }
 }

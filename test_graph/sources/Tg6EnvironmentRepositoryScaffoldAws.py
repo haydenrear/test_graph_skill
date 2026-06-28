@@ -18,6 +18,7 @@ from branch_environment_harness import (
     environment_output_keys,
     git,
     init_environment_repository,
+    reset_environment_repository_contract_state,
     scaffold_environment_repository,
     scaffolded_environment_repository_dir,
 )
@@ -42,6 +43,7 @@ SPEC = (
 
 @node(SPEC)
 def main(ctx):
+    reset_environment_repository_contract_state()
     repo = scaffold_environment_repository(
         REPOSITORY_DIR,
         targets=["local-preview", "aws-preview"],
