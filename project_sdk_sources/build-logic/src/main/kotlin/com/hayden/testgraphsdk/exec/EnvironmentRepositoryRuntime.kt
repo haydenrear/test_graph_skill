@@ -228,7 +228,8 @@ internal class EnvironmentRepositoryRuntime(
         env["TEST_GRAPH_GIT_BIN"]?.trim()?.takeIf { it.isNotEmpty() } ?: "git"
 
     private fun cloneSource(source: String): String {
-        if (source.startsWith("git@") || source.startsWith("https://") ||
+        if (source.startsWith("git@") || source.startsWith("http://") ||
+            source.startsWith("https://") ||
             source.startsWith("ssh://") || source.startsWith("git://")) {
             return source
         }

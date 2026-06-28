@@ -7,6 +7,24 @@ import org.gradle.api.logging.Logger
 import java.io.File
 import java.time.Instant
 
+internal fun dependencyClosureByNode(plan: List<ValidationNodeSpec>): Map<String, Set<String>> {
+    val byId = plan.associateBy { it.id }
+    val memo = mutableMapOf<String, Set<String>>()
+
+    fun visit(nodeId: String): Set<String> =
+        memo.getOrPut(nodeId) {
+            val spec = byId[nodeId] ?: return@getOrPut emptySet()
+            buildSet {
+                for (dependencyId in spec.dependsOn) {
+                    add(dependencyId)
+                    addAll(visit(dependencyId))
+                }
+            }
+        }
+
+    return plan.associate { spec -> spec.id to visit(spec.id) }
+}
+
 internal fun jsonObjectValueRange(json: String, key: String): IntRange? {
     var depth = 0
     var inString = false
@@ -122,6 +140,7 @@ class PlanExecutor(
         val resumeState = prepareResume(plan, resumeFromBuild)
         val cumulative = resumeState.initialContext.toMutableList()
         val executionPlan = resumeState.executionPlan
+        val dependencyClosure = dependencyClosureByNode(plan)
         executionPlan.forEach { it.sideEffectSpecs() }
         val provisioningState = ProvisioningState(projectDir.asFile, graphName, runId)
         val environmentRepositoryRuntime = EnvironmentRepositoryRuntime(
@@ -154,7 +173,10 @@ class PlanExecutor(
             val maxAttempts = spec.retries + 1
             val preparedProvisioning = provisioningState.prepare(spec)
             val sideEffectSpecs = spec.sideEffectSpecs()
-            val projectedEnvironment = EnvironmentContextProjection.project(cumulative, sideEffectSpecs)
+            val dependencyContext = cumulative.filter {
+                it.nodeId in (dependencyClosure[spec.id] ?: emptySet())
+            }
+            val projectedEnvironment = EnvironmentContextProjection.project(dependencyContext, sideEffectSpecs)
 
             var execOutcome: ExecutionOutcome = ExecutionOutcome.TimedOut
             var environmentExecution: EnvironmentRepositoryExecution? = null

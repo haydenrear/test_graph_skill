@@ -169,6 +169,21 @@ class EnvironmentRepositoryRuntimeTest {
         assertEquals("updated-feature-a", second.outputs["KUBECONTEXT"])
     }
 
+    @Test
+    fun leavesHttpGitRemoteSourcesUnchanged() {
+        val method = EnvironmentRepositoryRuntime::class.java.getDeclaredMethod("cloneSource", String::class.java)
+        method.isAccessible = true
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-http").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val state = ProvisioningState(projectDir, "environmentRepositoryContract", "run-1")
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+
+        assertEquals(
+            "http://git.example/repo.git",
+            method.invoke(runtime, "http://git.example/repo.git"),
+        )
+    }
+
     private fun node(
         id: String,
         source: File,
