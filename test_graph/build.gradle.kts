@@ -90,4 +90,11 @@ validationGraph {
         node("sources/ResetNode.java")
         node("sources/DeleteCluster.java")
     }
+
+    testGraph("environmentRepositoryContractJbang") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldLocal.py")
+        node("sources/Tg6EnvironmentRepositoryProvisionJbang.java")
+        node("sources/Tg6EnvironmentContextEnvKeyJbang.java")
+        node("sources/Tg6EnvironmentContextEnvAllJbang.java")
+    }
 }
