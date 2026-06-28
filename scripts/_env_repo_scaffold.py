@@ -133,6 +133,33 @@ def add_tofu_shim(repo_root: Path, *, force: bool = False) -> Path:
     return path
 
 
+def add_lifecycle_node_templates(
+    sources_dir: Path,
+    *,
+    target: str,
+    runtime: str = "all",
+    force: bool = False,
+) -> list[Path]:
+    selected = target_template(target)
+    runtimes = ["uv", "jbang"] if runtime == "all" else [runtime]
+    invalid = [value for value in runtimes if value not in {"uv", "jbang"}]
+    if invalid:
+        raise ValueError("runtime must be one of: uv, jbang, all")
+
+    created: list[Path] = []
+    if "uv" in runtimes:
+        for filename, text in python_lifecycle_templates(selected).items():
+            path = sources_dir / filename
+            write_file(path, text, force=force)
+            created.append(path)
+    if "jbang" in runtimes:
+        for filename, text in java_lifecycle_templates(selected).items():
+            path = sources_dir / filename
+            write_file(path, text, force=force)
+            created.append(path)
+    return created
+
+
 def readme_text(template: str) -> str:
     contract_path = f"templates/{normalize_template(template)}"
     return f"""# Test Graph Environment Repository
@@ -279,6 +306,108 @@ JSON
     exit 64
     ;;
 esac
+"""
+
+
+def python_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
+    return {
+        "deploy_cluster.py": python_lifecycle_template(
+            "branch.environment.deploy-cluster",
+            "deploy_cluster",
+            f'"{target.target}", "{target.backend}"',
+        ),
+        "reset_node.py": python_lifecycle_template(
+            "branch.environment.reset-node",
+            "reset_node",
+            f'"{target.target}", "{target.backend}"',
+        ),
+        "delete_cluster.py": python_lifecycle_template(
+            "branch.environment.delete-cluster",
+            "delete_cluster",
+            f'"{target.target}", "{target.backend}", destroy_requested=False',
+        ),
+    }
+
+
+def python_lifecycle_template(node_id: str, function: str, args: str) -> str:
+    return f"""# /// script
+# requires-python = ">=3.10"
+# dependencies = ["testgraphsdk"]
+#
+# [tool.uv.sources]
+# testgraphsdk = {{ path = "../sdk/python", editable = true }}
+# ///
+from __future__ import annotations
+
+from testgraphsdk import NodeResult, NodeSpec, {function}, node
+
+
+SPEC = NodeSpec("{node_id}").kind("action").tags("environment", "lifecycle")
+
+
+@node(SPEC)
+def main(ctx):
+    plan = {function}({args})
+    result = NodeResult.pass_(ctx.node_id).assertion("lifecycle_plan_resolved", bool(plan.dispatch_key))
+    for key, value in plan.published().items():
+        result.publish(key, value)
+    return result
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def java_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
+    return {
+        "DeployCluster.java": java_lifecycle_template(
+            "DeployCluster",
+            "branch.environment.deploy-cluster",
+            f'ClusterLifecycle.deployCluster("{target.target}", "{target.backend}", false)',
+        ),
+        "ResetNode.java": java_lifecycle_template(
+            "ResetNode",
+            "branch.environment.reset-node",
+            f'ClusterLifecycle.resetNode("{target.target}", "{target.backend}", false, false)',
+        ),
+        "DeleteCluster.java": java_lifecycle_template(
+            "DeleteCluster",
+            "branch.environment.delete-cluster",
+            f'ClusterLifecycle.deleteCluster("{target.target}", "{target.backend}", false)',
+        ),
+    }
+
+
+def java_lifecycle_template(class_name: str, node_id: str, expression: str) -> str:
+    return f"""///usr/bin/env jbang "$0" "$@" ; exit $?
+//SOURCES ../sdk/java/src/main/java/com/hayden/testgraphsdk/sdk/*.java
+
+import java.util.Map;
+
+import com.hayden.testgraphsdk.sdk.ClusterLifecycle;
+import com.hayden.testgraphsdk.sdk.ClusterLifecyclePlan;
+import com.hayden.testgraphsdk.sdk.Node;
+import com.hayden.testgraphsdk.sdk.NodeResult;
+import com.hayden.testgraphsdk.sdk.NodeSpec;
+
+public class {class_name} {{
+    private static final NodeSpec SPEC = NodeSpec.of("{node_id}")
+            .kind(NodeSpec.Kind.ACTION)
+            .tags("environment", "lifecycle");
+
+    public static void main(String[] args) {{
+        Node.run(args, SPEC, ctx -> {{
+            ClusterLifecyclePlan plan = {expression};
+            NodeResult result = NodeResult.pass(ctx.nodeId())
+                    .assertion("lifecycle_plan_resolved", !plan.dispatchKey().isBlank());
+            for (Map.Entry<String, String> entry : plan.published().entrySet()) {{
+                result.publish(entry.getKey(), entry.getValue());
+            }}
+            return result;
+        }});
+    }}
+}}
 """
 
 

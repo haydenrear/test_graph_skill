@@ -81,4 +81,13 @@ validationGraph {
     testGraph("environmentRepositoryScaffoldAws") {
         node("sources/Tg6EnvironmentRepositoryScaffoldAws.py")
     }
+
+    testGraph("environmentLifecycleNodeTemplates") {
+        node("sources/deploy_cluster.py")
+        node("sources/reset_node.py")
+        node("sources/delete_cluster.py")
+        node("sources/DeployCluster.java")
+        node("sources/ResetNode.java")
+        node("sources/DeleteCluster.java")
+    }
 }

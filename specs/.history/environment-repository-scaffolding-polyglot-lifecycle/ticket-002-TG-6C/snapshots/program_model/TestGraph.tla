@@ -1,8 +1,7 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Current whole-program model for the active TG-6 workflow. The accepted
-\* baseline already models
+\* Current whole-program model for TG-5E. The accepted baseline already models
 \* graph definition, dependency resolution, node execution, published context,
 \* reports, and build-directory rerun semantics. TG-5A adds SDK side-effect
 \* runtime metadata validation. TG-5B adds provisioning marker state and
@@ -10,9 +9,7 @@ EXTENDS Naturals, FiniteSets, Sequences, TLC
 \* environment repository contract and branch environment declaration. TG-5E
 \* adds reusable environment repository execution and downstream environment
 \* context propagation. TG-5F adds branch environment deployment, reset, and
-\* merge destroy lifecycle state. TG-6B adds environment repository and
-\* target template scaffolding. TG-6C adds shared lifecycle node template
-\* scaffolding and explicit reset/delete skip semantics.
+\* merge destroy lifecycle state.
 
 CONSTANTS
   Graphs,
@@ -24,7 +21,6 @@ CONSTANTS
   EnvironmentBackends,
   ContextKeys,
   RequiredEnvironmentContext,
-  LifecycleCommands,
   NoReason
 
 VARIABLES
@@ -64,11 +60,6 @@ VARIABLES
   destroy_authorized_environments,
   destroyed_branch_environments,
   environment_context_keys,
-  environment_repository_scaffolded,
-  scaffolded_environment_templates,
-  scaffolded_lifecycle_node_templates,
-  skipped_reset_environments,
-  skipped_destroy_environments,
   result
 
 vars ==
@@ -83,11 +74,7 @@ vars ==
      reused_branch_environments, reset_branch_environments,
      deployed_branch_environments, propagated_environment_contexts,
      merge_destroy_requested, destroy_authorized_environments,
-     destroyed_branch_environments, environment_context_keys,
-     environment_repository_scaffolded, scaffolded_environment_templates,
-     scaffolded_lifecycle_node_templates, skipped_reset_environments,
-     skipped_destroy_environments,
-     result >>
+     destroyed_branch_environments, environment_context_keys, result >>
 
 resumption_vars ==
   << input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
@@ -104,14 +91,7 @@ provisioning_vars ==
      reset_branch_environments, deployed_branch_environments,
      merge_destroy_requested, propagated_environment_contexts,
      destroy_authorized_environments, destroyed_branch_environments,
-     environment_context_keys, environment_repository_scaffolded,
-     scaffolded_environment_templates, scaffolded_lifecycle_node_templates,
-     skipped_reset_environments, skipped_destroy_environments >>
-
-environment_scaffold_vars ==
-  << environment_repository_scaffolded, scaffolded_environment_templates,
-     scaffolded_lifecycle_node_templates, skipped_reset_environments,
-     skipped_destroy_environments >>
+     environment_context_keys >>
 
 BranchEnvironment(g, b, target, backend) ==
   [graph |-> g, branch |-> b, target |-> target, backend |-> backend]
@@ -119,13 +99,6 @@ BranchEnvironment(g, b, target, backend) ==
 AllBranchEnvironments ==
   {BranchEnvironment(g, b, target, backend) :
     g \in Graphs, b \in Branches,
-    target \in EnvironmentTargets, backend \in EnvironmentBackends}
-
-EnvironmentTemplate(target, backend) ==
-  [target |-> target, backend |-> backend]
-
-AllEnvironmentTemplates ==
-  {EnvironmentTemplate(target, backend) :
     target \in EnvironmentTargets, backend \in EnvironmentBackends}
 
 AvailableFor(g) ==
@@ -202,11 +175,6 @@ Init ==
   /\ destroy_authorized_environments = {}
   /\ destroyed_branch_environments = {}
   /\ environment_context_keys = [e \in AllBranchEnvironments |-> {}]
-  /\ environment_repository_scaffolded = FALSE
-  /\ scaffolded_environment_templates = {}
-  /\ scaffolded_lifecycle_node_templates = {}
-  /\ skipped_reset_environments = {}
-  /\ skipped_destroy_environments = {}
   /\ result = [accepted |-> TRUE, reason |-> NoReason]
 
 \* @command ScaffoldProject
@@ -600,12 +568,7 @@ ConfigureProvisioningState(g) ==
                   reset_branch_environments, deployed_branch_environments,
                   propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
-                  destroyed_branch_environments, environment_context_keys,
-                  environment_repository_scaffolded,
-                  scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                  destroyed_branch_environments, environment_context_keys >>
 
 \* @command RegisterFeatureBranch
 \* @result WorkflowResult
@@ -630,12 +593,7 @@ RegisterFeatureBranch(g, b) ==
                   reset_branch_environments, deployed_branch_environments,
                   propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
-                  destroyed_branch_environments, environment_context_keys,
-                  environment_repository_scaffolded,
-                  scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                  destroyed_branch_environments, environment_context_keys >>
 
 \* @command ConfigureEnvironmentRepository
 \* @result WorkflowResult
@@ -658,12 +616,7 @@ ConfigureEnvironmentRepository(g) ==
                   reset_branch_environments, deployed_branch_environments,
                   propagated_environment_contexts, merge_destroy_requested,
                   destroy_authorized_environments,
-                  destroyed_branch_environments, environment_context_keys,
-                  environment_repository_scaffolded,
-                  scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                  destroyed_branch_environments, environment_context_keys >>
 
 \* @command DeclareBranchEnvironment
 \* @result WorkflowResult
@@ -692,12 +645,7 @@ DeclareBranchEnvironment(g, b, target, backend) ==
                     reset_branch_environments, deployed_branch_environments,
                     propagated_environment_contexts, merge_destroy_requested,
                     destroy_authorized_environments,
-                    destroyed_branch_environments, environment_context_keys,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroyed_branch_environments, environment_context_keys >>
 
 \* @command ProvisionBranchEnvironment
 \* @result WorkflowResult
@@ -724,12 +672,7 @@ ProvisionBranchEnvironment(g, b, target, backend) ==
                     branch_environment_specs, reused_branch_environments,
                     reset_branch_environments, deployed_branch_environments,
                     propagated_environment_contexts, merge_destroy_requested,
-                    destroy_authorized_environments,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroy_authorized_environments >>
 
 \* @command ReuseBranchEnvironment
 \* @result WorkflowResult
@@ -757,12 +700,7 @@ ReuseBranchEnvironment(g, b, target, backend) ==
                     reset_branch_environments, deployed_branch_environments,
                     propagated_environment_contexts, merge_destroy_requested,
                     destroy_authorized_environments,
-                    destroyed_branch_environments,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroyed_branch_environments >>
 
 \* @command DeployApplicationToBranchEnvironment
 \* @result WorkflowResult
@@ -788,12 +726,7 @@ DeployApplicationToBranchEnvironment(g, b, target, backend) ==
                     reused_branch_environments, merge_destroy_requested,
                     propagated_environment_contexts,
                     destroy_authorized_environments,
-                    destroyed_branch_environments, environment_context_keys,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroyed_branch_environments, environment_context_keys >>
 
 \* @command PropagateEnvironmentContext
 \* @result WorkflowResult
@@ -818,12 +751,7 @@ PropagateEnvironmentContext(g, b, target, backend) ==
                     reset_branch_environments, deployed_branch_environments,
                     merge_destroy_requested, destroy_authorized_environments,
                     destroyed_branch_environments,
-                    environment_context_keys,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    environment_context_keys >>
 
 \* @command ResetBranchEnvironment
 \* @result WorkflowResult
@@ -848,12 +776,7 @@ ResetBranchEnvironment(g, b, target, backend) ==
                     provisioned_branch_environments, reused_branch_environments,
                     merge_destroy_requested, propagated_environment_contexts,
                     destroy_authorized_environments,
-                    destroyed_branch_environments, environment_context_keys,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroyed_branch_environments, environment_context_keys >>
 
 \* @command RequestMergedBranchDestroy
 \* @result WorkflowResult
@@ -862,7 +785,6 @@ RequestMergedBranchDestroy(g, b, target, backend) ==
   LET e == BranchEnvironment(g, b, target, backend)
   IN
     /\ e \in provisioned_branch_environments
-    /\ e \notin skipped_destroy_environments
     /\ merge_destroy_requested' = merge_destroy_requested \cup {e}
     /\ destroy_authorized_environments' = destroy_authorized_environments \cup {e}
     /\ result' = [accepted |-> TRUE, reason |-> NoReason]
@@ -879,12 +801,7 @@ RequestMergedBranchDestroy(g, b, target, backend) ==
                     provisioned_branch_environments, reused_branch_environments,
                     reset_branch_environments, deployed_branch_environments,
                     propagated_environment_contexts,
-                    destroyed_branch_environments, environment_context_keys,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments >>
+                    destroyed_branch_environments, environment_context_keys >>
 
 \* @command DestroyMergedBranchEnvironment
 \* @result WorkflowResult
@@ -894,7 +811,6 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
   IN
     /\ e \in provisioned_branch_environments
     /\ e \in merge_destroy_requested
-    /\ e \notin skipped_destroy_environments
     /\ provisioned_branch_environments' = provisioned_branch_environments \ {e}
     /\ reused_branch_environments' = reused_branch_environments \ {e}
     /\ reset_branch_environments' = reset_branch_environments \ {e}
@@ -903,7 +819,6 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
     /\ merge_destroy_requested' = merge_destroy_requested \ {e}
     /\ destroyed_branch_environments' = destroyed_branch_environments \cup {e}
     /\ environment_context_keys' = [environment_context_keys EXCEPT ![e] = {}]
-    /\ skipped_reset_environments' = skipped_reset_environments \ {e}
     /\ result' = [accepted |-> TRUE, reason |-> NoReason]
     /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
                     described_nodes, dsl_deps, overlays, resolved_nodes,
@@ -915,162 +830,7 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
                     provisioning_state_configured,
                     feature_branches, environment_repo_configured,
                     branch_environment_specs,
-                    destroy_authorized_environments,
-                    environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_destroy_environments >>
-
-\* @command ScaffoldEnvironmentRepository
-\* @result WorkflowResult
-\* @port TestGraphProgramPort.scaffold_environment_repository
-ScaffoldEnvironmentRepository ==
-  /\ scaffolded
-  /\ environment_repository_scaffolded = FALSE
-  /\ environment_repository_scaffolded' = TRUE
-  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded,
-                  scaffolded_environment_templates,
-                  scaffolded_lifecycle_node_templates,
-                  skipped_reset_environments,
-                  skipped_destroy_environments,
-                  declared_graphs, explicit_nodes, script_deps,
-                  described_nodes, dsl_deps, overlays, resolved_nodes,
-                  planned_graphs, plan_docs, active_graphs, passed_nodes,
-                  terminal_nodes, envelopes, context_items, input_contexts,
-                  rerunnable_nodes, rerun_guidance, resumed_nodes,
-                  single_node_reruns, run_reports, package_catalog,
-                  side_effect_runtime_configured, provisioning_state_configured,
-                  feature_branches, environment_repo_configured,
-                  branch_environment_specs, provisioned_branch_environments,
-                  reused_branch_environments, reset_branch_environments,
-                  deployed_branch_environments, propagated_environment_contexts,
-                  merge_destroy_requested, destroy_authorized_environments,
-                  destroyed_branch_environments, environment_context_keys >>
-
-\* @command ScaffoldEnvironmentTemplate
-\* @result WorkflowResult
-\* @port TestGraphProgramPort.scaffold_environment_template
-ScaffoldEnvironmentTemplate(target, backend) ==
-  LET template == EnvironmentTemplate(target, backend)
-  IN
-    /\ scaffolded
-    /\ environment_repository_scaffolded
-    /\ target \in EnvironmentTargets
-    /\ backend \in EnvironmentBackends
-    /\ template \notin scaffolded_environment_templates
-    /\ scaffolded_environment_templates' =
-        scaffolded_environment_templates \cup {template}
-    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-    /\ UNCHANGED << scaffolded,
-                    environment_repository_scaffolded,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments,
-                    skipped_destroy_environments,
-                    declared_graphs, explicit_nodes, script_deps,
-                    described_nodes, dsl_deps, overlays, resolved_nodes,
-                    planned_graphs, plan_docs, active_graphs, passed_nodes,
-                    terminal_nodes, envelopes, context_items, input_contexts,
-                    rerunnable_nodes, rerun_guidance, resumed_nodes,
-                    single_node_reruns, run_reports, package_catalog,
-                    side_effect_runtime_configured, provisioning_state_configured,
-                    feature_branches, environment_repo_configured,
-                    branch_environment_specs, provisioned_branch_environments,
-                    reused_branch_environments, reset_branch_environments,
-                    deployed_branch_environments, propagated_environment_contexts,
-                    merge_destroy_requested, destroy_authorized_environments,
-                    destroyed_branch_environments, environment_context_keys >>
-
-\* @command ScaffoldLifecycleNodeTemplate
-\* @result WorkflowResult
-\* @port TestGraphProgramPort.scaffold_lifecycle_node_template
-ScaffoldLifecycleNodeTemplate(command) ==
-  /\ scaffolded
-  /\ environment_repository_scaffolded
-  /\ command \in LifecycleCommands
-  /\ command \notin scaffolded_lifecycle_node_templates
-  /\ scaffolded_lifecycle_node_templates' =
-      scaffolded_lifecycle_node_templates \cup {command}
-  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-  /\ UNCHANGED << scaffolded,
-                  environment_repository_scaffolded,
-                  scaffolded_environment_templates,
-                  skipped_reset_environments,
-                  skipped_destroy_environments,
-                  declared_graphs, explicit_nodes, script_deps,
-                  described_nodes, dsl_deps, overlays, resolved_nodes,
-                  planned_graphs, plan_docs, active_graphs, passed_nodes,
-                  terminal_nodes, envelopes, context_items, input_contexts,
-                  rerunnable_nodes, rerun_guidance, resumed_nodes,
-                  single_node_reruns, run_reports, package_catalog,
-                  side_effect_runtime_configured, provisioning_state_configured,
-                  feature_branches, environment_repo_configured,
-                  branch_environment_specs, provisioned_branch_environments,
-                  reused_branch_environments, reset_branch_environments,
-                  deployed_branch_environments, propagated_environment_contexts,
-                  merge_destroy_requested, destroy_authorized_environments,
-                  destroyed_branch_environments, environment_context_keys >>
-
-\* @command SkipBranchEnvironmentReset
-\* @result WorkflowResult
-\* @port TestGraphProgramPort.skip_branch_environment_reset
-SkipBranchEnvironmentReset(g, b, target, backend) ==
-  LET e == BranchEnvironment(g, b, target, backend)
-  IN
-    /\ e \in provisioned_branch_environments
-    /\ e \notin merge_destroy_requested
-    /\ (e \notin deployed_branch_environments \/ e \in reset_branch_environments)
-    /\ e \notin skipped_reset_environments
-    /\ skipped_reset_environments' = skipped_reset_environments \cup {e}
-    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-    /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
-                    described_nodes, dsl_deps, overlays, resolved_nodes,
-                    planned_graphs, plan_docs, active_graphs, passed_nodes,
-                    terminal_nodes, envelopes, context_items, input_contexts,
-                    rerunnable_nodes, rerun_guidance, resumed_nodes,
-                    single_node_reruns, run_reports, package_catalog,
-                    side_effect_runtime_configured,
-                    provisioning_state_configured,
-                    feature_branches, environment_repo_configured,
-                    branch_environment_specs,
-                    provisioned_branch_environments, reused_branch_environments,
-                    reset_branch_environments, deployed_branch_environments,
-                    propagated_environment_contexts, merge_destroy_requested,
-                    destroy_authorized_environments, destroyed_branch_environments,
-                    environment_context_keys, environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_destroy_environments >>
-
-\* @command SkipBranchEnvironmentDestroy
-\* @result WorkflowResult
-\* @port TestGraphProgramPort.skip_branch_environment_destroy
-SkipBranchEnvironmentDestroy(g, b, target, backend) ==
-  LET e == BranchEnvironment(g, b, target, backend)
-  IN
-    /\ e \in provisioned_branch_environments
-    /\ e \notin merge_destroy_requested
-    /\ e \notin skipped_destroy_environments
-    /\ skipped_destroy_environments' = skipped_destroy_environments \cup {e}
-    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
-    /\ UNCHANGED << scaffolded, declared_graphs, explicit_nodes, script_deps,
-                    described_nodes, dsl_deps, overlays, resolved_nodes,
-                    planned_graphs, plan_docs, active_graphs, passed_nodes,
-                    terminal_nodes, envelopes, context_items, input_contexts,
-                    rerunnable_nodes, rerun_guidance, resumed_nodes,
-                    single_node_reruns, run_reports, package_catalog,
-                    side_effect_runtime_configured,
-                    provisioning_state_configured,
-                    feature_branches, environment_repo_configured,
-                    branch_environment_specs,
-                    provisioned_branch_environments, reused_branch_environments,
-                    reset_branch_environments, deployed_branch_environments,
-                    propagated_environment_contexts, merge_destroy_requested,
-                    destroy_authorized_environments, destroyed_branch_environments,
-                    environment_context_keys, environment_repository_scaffolded,
-                    scaffolded_environment_templates,
-                    scaffolded_lifecycle_node_templates,
-                    skipped_reset_environments >>
+                    destroy_authorized_environments >>
 
 NoOp ==
   UNCHANGED vars
@@ -1140,17 +900,6 @@ Next ==
   \/ \E g \in Graphs, b \in Branches,
         target \in EnvironmentTargets, backend \in EnvironmentBackends:
       DestroyMergedBranchEnvironment(g, b, target, backend)
-  \/ ScaffoldEnvironmentRepository
-  \/ \E target \in EnvironmentTargets, backend \in EnvironmentBackends:
-      ScaffoldEnvironmentTemplate(target, backend)
-  \/ \E command \in LifecycleCommands:
-      ScaffoldLifecycleNodeTemplate(command)
-  \/ \E g \in Graphs, b \in Branches,
-        target \in EnvironmentTargets, backend \in EnvironmentBackends:
-      SkipBranchEnvironmentReset(g, b, target, backend)
-  \/ \E g \in Graphs, b \in Branches,
-        target \in EnvironmentTargets, backend \in EnvironmentBackends:
-      SkipBranchEnvironmentDestroy(g, b, target, backend)
   \/ NoOp
 
 \* @invariant TypeInvariant
@@ -1191,13 +940,7 @@ TypeInvariant ==
   /\ destroy_authorized_environments \subseteq AllBranchEnvironments
   /\ destroyed_branch_environments \subseteq AllBranchEnvironments
   /\ environment_context_keys \in [AllBranchEnvironments -> SUBSET ContextKeys]
-  /\ environment_repository_scaffolded \in BOOLEAN
-  /\ scaffolded_environment_templates \subseteq AllEnvironmentTemplates
-  /\ scaffolded_lifecycle_node_templates \subseteq LifecycleCommands
-  /\ skipped_reset_environments \subseteq AllBranchEnvironments
-  /\ skipped_destroy_environments \subseteq AllBranchEnvironments
   /\ RequiredEnvironmentContext \subseteq ContextKeys
-  /\ LifecycleCommands /= {}
   /\ result.accepted \in BOOLEAN
 
 \* @invariant ExplicitNodesAreAvailable
@@ -1324,23 +1067,6 @@ DestroyedEnvironmentsAreNotActive ==
     (provisioned_branch_environments \cup reused_branch_environments \cup
      reset_branch_environments \cup deployed_branch_environments \cup
      propagated_environment_contexts) = {}
-
-\* @invariant EnvironmentTemplatesRequireRepositoryScaffold
-EnvironmentTemplatesRequireRepositoryScaffold ==
-  scaffolded_environment_templates /= {} => environment_repository_scaffolded
-
-\* @invariant LifecycleNodeTemplatesRequireRepositoryScaffold
-LifecycleNodeTemplatesRequireRepositoryScaffold ==
-  scaffolded_lifecycle_node_templates /= {} => environment_repository_scaffolded
-
-\* @invariant SkippedResetEnvironmentsRemainProvisioned
-SkippedResetEnvironmentsRemainProvisioned ==
-  skipped_reset_environments \subseteq provisioned_branch_environments
-
-\* @invariant SkippedDestroyEnvironmentsRemainActive
-SkippedDestroyEnvironmentsRemainActive ==
-  /\ skipped_destroy_environments \subseteq provisioned_branch_environments
-  /\ skipped_destroy_environments \cap destroyed_branch_environments = {}
 
 Spec ==
   Init /\ [][Next]_vars

@@ -1,8 +1,7 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Current whole-program model for the active TG-6 workflow. The accepted
-\* baseline already models
+\* Current whole-program model for TG-5E. The accepted baseline already models
 \* graph definition, dependency resolution, node execution, published context,
 \* reports, and build-directory rerun semantics. TG-5A adds SDK side-effect
 \* runtime metadata validation. TG-5B adds provisioning marker state and
