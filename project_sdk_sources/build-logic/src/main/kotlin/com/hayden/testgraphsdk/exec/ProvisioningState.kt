@@ -65,6 +65,10 @@ internal class ProvisioningState(
 
         val identity = identity(spec)
         if (identity.requiresAwsCredentials()) {
+            require(awsLifecycleSelected()) {
+                "node '${spec.id}' selected AWS branch environment target/backend " +
+                    "(${identity.target}/${identity.backend}) but TEST_GRAPH_RUN_AWS_LIFECYCLE is not true"
+            }
             require(awsCredentialsPresent()) {
                 "node '${spec.id}' selected AWS branch environment target/backend " +
                     "(${identity.target}/${identity.backend}) but AWS credentials were not found"
@@ -179,6 +183,10 @@ internal class ProvisioningState(
 
     private fun awsCredentialsPresent(): Boolean =
         firstEnv("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_WEB_IDENTITY_TOKEN_FILE") != null
+
+    private fun awsLifecycleSelected(): Boolean =
+        firstEnv("TEST_GRAPH_RUN_AWS_LIFECYCLE", "TESTGRAPH_RUN_AWS_LIFECYCLE")
+            ?.lowercase() in setOf("1", "true", "yes", "y")
 
     private fun BranchEnvironmentIdentity.requiresAwsCredentials(): Boolean =
         target.contains("aws", ignoreCase = true) || backend.contains("aws", ignoreCase = true)

@@ -181,21 +181,39 @@ class ProvisioningStateTest {
     }
 
     @Test
-    fun awsTargetRequiresCredentials() {
+    fun awsTargetRequiresExplicitSelectionAndCredentials() {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val state = state(
             projectDir,
-            env = baseEnv() + mapOf("TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview"),
+            env = baseEnv() + mapOf(
+                "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
+                "AWS_PROFILE" to "test",
+            ),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        val selectionError = assertFailsWith<IllegalArgumentException> {
             state.prepare(node("environment.provision", "environment:provision"))
         }
+        assertTrue(selectionError.message?.contains("TEST_GRAPH_RUN_AWS_LIFECYCLE") == true)
+
+        val selectedWithoutCredentials = state(
+            projectDir,
+            env = baseEnv() + mapOf(
+                "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
+                "TEST_GRAPH_RUN_AWS_LIFECYCLE" to "true",
+            ),
+        )
+
+        val credentialsError = assertFailsWith<IllegalArgumentException> {
+            selectedWithoutCredentials.prepare(node("environment.provision", "environment:provision"))
+        }
+        assertTrue(credentialsError.message?.contains("AWS credentials") == true)
 
         val credentialed = state(
             projectDir,
             env = baseEnv() + mapOf(
                 "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
+                "TEST_GRAPH_RUN_AWS_LIFECYCLE" to "true",
                 "AWS_PROFILE" to "test",
             ),
         )
