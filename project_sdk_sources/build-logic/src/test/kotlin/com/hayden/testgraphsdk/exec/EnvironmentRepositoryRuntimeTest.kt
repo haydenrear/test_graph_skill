@@ -9,6 +9,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class EnvironmentRepositoryRuntimeTest {
@@ -92,6 +93,26 @@ class EnvironmentRepositoryRuntimeTest {
         assertEquals("github-action", execution.outputs["BACKEND"])
     }
 
+    @Test
+    fun rejectsCompositeOpenTofuOutputValues() {
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-composite").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val source = createEnvironmentRepository(projectDir, compositeKubeconfig = true)
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryContract",
+            runId = "run-1",
+            env = mapOf("TEST_GRAPH_FEATURE_BRANCH" to "feature-a"),
+        )
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+        val provision = node("environment.provision", source)
+
+        val error = assertFailsWith<IllegalStateException> {
+            runtime.execute(provision, state.prepare(provision))
+        }
+        assertTrue(error.message.orEmpty().contains("tofu output 'KUBECONFIG' did not include a scalar value"))
+    }
+
     private fun node(
         id: String,
         source: File,
@@ -109,12 +130,17 @@ class EnvironmentRepositoryRuntimeTest {
             environmentRepository = repository,
         )
 
-    private fun createEnvironmentRepository(projectDir: File): File {
+    private fun createEnvironmentRepository(projectDir: File, compositeKubeconfig: Boolean = false): File {
         val repo = File(projectDir, "build/generated-env-source").apply { mkdirs() }
         File(repo, "templates/local-preview").mkdirs()
         File(repo, "templates/local-preview/main.tf").writeText("terraform {}\n")
         File(repo, "templates/local-preview/variables.tf").writeText("variable \"environment_id\" { type = string }\n")
         File(repo, "templates/local-preview/outputs.tf").writeText("output \"EnvironmentId\" { value = var.environment_id }\n")
+        val kubeconfigOutput = if (compositeKubeconfig) {
+            """["${'$'}PWD/generated/kubeconfig"]"""
+        } else {
+            "\"${'$'}PWD/generated/kubeconfig\""
+        }
         val tofu = File(repo, "bin/tofu").apply {
             parentFile.mkdirs()
             writeText(
@@ -133,7 +159,7 @@ class EnvironmentRepositoryRuntimeTest {
                     ;;
                   output)
                     cat <<JSON
-                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":"${'$'}PWD/generated/kubeconfig"},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${'$'}TF_VAR_branch"},"TARGET":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_target"},"BACKEND":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_backend"}}
+                {"EnvironmentId":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_environment_id"},"KUBECONFIG":{"sensitive":false,"type":"string","value":${kubeconfigOutput}},"KUBECONTEXT":{"sensitive":false,"type":"string","value":"test-graph-${'$'}TF_VAR_branch"},"TARGET":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_target"},"BACKEND":{"sensitive":false,"type":"string","value":"${'$'}TF_VAR_backend"}}
                 JSON
                     ;;
                   destroy)

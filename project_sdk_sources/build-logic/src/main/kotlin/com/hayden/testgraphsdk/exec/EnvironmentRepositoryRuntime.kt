@@ -156,7 +156,7 @@ internal class EnvironmentRepositoryRuntime(
             null -> null
             is String -> rawValue
             is Number, is Boolean -> rawValue.toString()
-            else -> rawValue.toString()
+            else -> null
         }
     }
 

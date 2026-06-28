@@ -7,6 +7,44 @@ import org.gradle.api.logging.Logger
 import java.io.File
 import java.time.Instant
 
+internal fun jsonObjectValueRange(json: String, key: String): IntRange? {
+    val keyIndex = json.indexOf(key)
+    if (keyIndex < 0) return null
+    val colon = json.indexOf(':', keyIndex)
+    if (colon < 0) return null
+    val braceStart = json.indexOf('{', colon)
+    if (braceStart < 0) return null
+
+    var depth = 0
+    var inString = false
+    var escaped = false
+    var end = -1
+    for (i in braceStart until json.length) {
+        val ch = json[i]
+        if (inString) {
+            when {
+                escaped -> escaped = false
+                ch == '\\' -> escaped = true
+                ch == '"' -> inString = false
+            }
+            continue
+        }
+        when (ch) {
+            '"' -> inString = true
+            '{' -> depth++
+            '}' -> {
+                depth--
+                if (depth == 0) {
+                    end = i
+                    break
+                }
+            }
+        }
+    }
+    if (end < 0) return null
+    return keyIndex..end
+}
+
 /**
  * Runs a topo-sorted plan node-by-node, building a cumulative
  * {@code List<ContextItem>} as it goes.
@@ -491,7 +529,7 @@ class PlanExecutor(
             append("}")
         }
 
-        val range = objectValueRange(envelopeJson, "\"published\"")
+        val range = jsonObjectValueRange(envelopeJson, "\"published\"")
         if (range != null) {
             return envelopeJson.replaceRange(range, replacement)
         }
@@ -538,31 +576,6 @@ class PlanExecutor(
             append("]}")
             append("}\n")
         }
-    }
-
-    private fun objectValueRange(json: String, key: String): IntRange? {
-        val keyIndex = json.indexOf(key)
-        if (keyIndex < 0) return null
-        val colon = json.indexOf(':', keyIndex)
-        if (colon < 0) return null
-        val braceStart = json.indexOf('{', colon)
-        if (braceStart < 0) return null
-        var depth = 0
-        var end = -1
-        for (i in braceStart until json.length) {
-            when (json[i]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) {
-                        end = i
-                        break
-                    }
-                }
-            }
-        }
-        if (end < 0) return null
-        return keyIndex..end
     }
 
     private fun addProvisioningState(
