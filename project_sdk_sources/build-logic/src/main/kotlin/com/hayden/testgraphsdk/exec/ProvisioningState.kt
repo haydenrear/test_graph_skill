@@ -97,6 +97,7 @@ internal class ProvisioningState(
         val provisionedMarker = if ("provision" in prepared.actions) {
             marker("provisioned", identity.id).also {
                 writeMarker(it, identity, spec, timestamp, "provisioned")
+                markerFile("destroyed", identity.id).delete()
             }
         } else null
 

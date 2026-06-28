@@ -121,6 +121,33 @@ class ProvisioningStateTest {
     }
 
     @Test
+    fun reprovisionClearsDestroyedMarker() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val provisionState = state(projectDir)
+        val provision = node("environment.provision", "environment:provision")
+        val provisionRecord = provisionState.recordSuccessful(provision, provisionState.prepare(provision), "passed")
+        val provisionedMarker = assertNotNull(provisionRecord?.provisionedMarker)
+
+        val destroyState = state(
+            projectDir,
+            env = baseEnv() + ("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT" to "true"),
+        )
+        val destroy = node("environment.destroy", "environment:destroy")
+        val destroyedMarker = assertNotNull(
+            destroyState.recordSuccessful(destroy, destroyState.prepare(destroy), "passed")?.destroyedMarker
+        )
+
+        assertFalse(provisionedMarker.exists())
+        assertTrue(destroyedMarker.isFile)
+
+        val reprovision = node("environment.reprovision", "environment:provision")
+        provisionState.recordSuccessful(reprovision, provisionState.prepare(reprovision), "passed")
+
+        assertTrue(provisionedMarker.isFile)
+        assertFalse(destroyedMarker.exists())
+    }
+
+    @Test
     fun awsTargetRequiresCredentials() {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val state = state(
