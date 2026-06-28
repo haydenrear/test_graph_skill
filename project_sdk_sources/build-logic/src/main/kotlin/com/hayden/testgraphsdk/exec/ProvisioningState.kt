@@ -150,8 +150,9 @@ internal class ProvisioningState(
     private fun identity(spec: ValidationNodeSpec): BranchEnvironmentIdentity {
         val repository = spec.environmentRepository
         val branchSelector = repository?.branch?.trim()
-        val branch = firstEnv("TEST_GRAPH_FEATURE_BRANCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME")
-            ?: branchSelector?.takeIf { it.isNotEmpty() && it != "feature" }
+        val fixedBranch = branchSelector?.takeIf { it.isNotEmpty() && it != "feature" }
+        val branch = fixedBranch
+            ?: firstEnv("TEST_GRAPH_FEATURE_BRANCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME")
             ?: "local"
 
         return BranchEnvironmentIdentity(

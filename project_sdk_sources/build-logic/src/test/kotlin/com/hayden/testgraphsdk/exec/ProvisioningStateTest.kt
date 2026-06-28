@@ -1,10 +1,12 @@
 package com.hayden.testgraphsdk.exec
 
+import com.hayden.testgraphsdk.EnvironmentRepositorySpec
 import com.hayden.testgraphsdk.NodeKind
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import com.hayden.testgraphsdk.ValidationRuntime
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -170,6 +172,34 @@ class ProvisioningStateTest {
         assertNotNull(credentialed.prepare(node("environment.provision", "environment:provision")))
     }
 
+    @Test
+    fun fixedEnvironmentRepositoryBranchSelectorOverridesCiBranchEnv() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val state = state(
+            projectDir,
+            env = baseEnv() + mapOf(
+                "GITHUB_HEAD_REF" to "feature-from-ci",
+                "GITHUB_REF_NAME" to "feature-from-ref",
+            ),
+        )
+        val spec = environmentRepositoryNode(
+            "environment.provision",
+            EnvironmentRepositorySpec(
+                source = "git@example.invalid:env.git",
+                template = "templates/branch-preview",
+                branch = "staging",
+            ),
+            "environment:provision",
+        )
+
+        val prepared = assertNotNull(state.prepare(spec))
+
+        assertEquals("staging", prepared.identity.branch)
+        assertTrue(prepared.identity.id.contains("__staging__"))
+        assertFalse(prepared.identity.id.contains("feature-a"))
+        assertFalse(prepared.identity.id.contains("feature-from-ci"))
+    }
+
     private fun state(
         projectDir: java.io.File,
         env: Map<String, String> = baseEnv(),
@@ -190,5 +220,18 @@ class ProvisioningStateTest {
             kind = NodeKind.ACTION,
             runtime = ValidationRuntime.Uv("sources/$id.py"),
             sideEffects = sideEffects.toSet(),
+        )
+
+    private fun environmentRepositoryNode(
+        id: String,
+        repository: EnvironmentRepositorySpec,
+        vararg sideEffects: String,
+    ): ValidationNodeSpec =
+        ValidationNodeSpec(
+            id = id,
+            kind = NodeKind.ACTION,
+            runtime = ValidationRuntime.Uv("sources/$id.py"),
+            sideEffects = sideEffects.toSet(),
+            environmentRepository = repository,
         )
 }

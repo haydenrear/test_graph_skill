@@ -64,6 +64,9 @@ internal class EnvironmentRepositoryRuntime(
         val commands = mutableListOf<EnvironmentRepositoryCommandRecord>()
         val repositoryDir = cloneOrReuseRepository(spec.id, repository, provisioning.identity, commands)
         val templateDir = File(repositoryDir, repository.template).canonicalFile
+        require(templateDir.toPath().startsWith(repositoryDir.toPath())) {
+            "environmentRepository.template '${repository.template}' must resolve inside ${repositoryDir.absolutePath}"
+        }
         require(templateDir.isDirectory) {
             "environmentRepository.template '${repository.template}' was not found in ${repositoryDir.absolutePath}"
         }

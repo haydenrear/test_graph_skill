@@ -137,6 +137,38 @@ class EnvironmentRepositoryRuntimeTest {
     }
 
     @Test
+    fun rejectsTemplateSymlinkEscapingClonedRepository() {
+        val projectDir = Files.createTempDirectory("test-graph-env-runtime-template-link").toFile()
+        val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
+        val source = createEnvironmentRepository(projectDir)
+        val externalTemplate = File(projectDir, "external-template").apply {
+            mkdirs()
+            File(this, "main.tf").writeText("terraform {}\n")
+        }
+        File(source, "templates/local-preview").deleteRecursively()
+        Files.createSymbolicLink(
+            File(source, "templates/local-preview").toPath(),
+            externalTemplate.toPath(),
+        )
+        git(source, "add", "-A", "templates/local-preview")
+        git(source, "commit", "-m", "Replace template with escaping symlink")
+
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryContract",
+            runId = "run-1",
+            env = mapOf("TEST_GRAPH_FEATURE_BRANCH" to "feature-a"),
+        )
+        val runtime = EnvironmentRepositoryRuntime(projectDir, reportRoot, state, env = emptyMap())
+        val provision = node("environment.provision", source)
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            runtime.execute(provision, state.prepare(provision))
+        }
+        assertTrue(error.message.orEmpty().contains("must resolve inside"))
+    }
+
+    @Test
     fun refreshesCachedCloneBeforeReuse() {
         val projectDir = Files.createTempDirectory("test-graph-env-runtime-refresh").toFile()
         val reportRoot = File(projectDir, "build/reports/run-1").apply { mkdirs() }
