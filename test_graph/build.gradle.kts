@@ -97,4 +97,23 @@ validationGraph {
         node("sources/Tg6EnvironmentContextEnvKeyJbang.java")
         node("sources/Tg6EnvironmentContextEnvAllJbang.java")
     }
+
+    testGraph("environmentRepositoryLocalLifecycle") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldLocal.py")
+        node("sources/Tg6LocalLifecycleProvisionMissing.py")
+        node("sources/Tg6LocalLifecycleDeployExisting.py")
+        node("sources/Tg6LocalLifecycleDeployMarkers.py")
+        node("sources/Tg6LocalLifecycleReset.py")
+        node("sources/Tg6LocalLifecycleResetMarkers.py")
+        node("sources/Tg6LocalLifecycleSkipDestroy.py")
+    }
+
+    testGraph("environmentRepositoryLocalLifecycleDestroy") {
+        node("sources/Tg6EnvironmentRepositoryScaffoldLocal.py")
+        node("sources/Tg6LocalLifecycleProvisionMissing.py")
+        node("sources/Tg6LocalLifecycleDeployExisting.py")
+        node("sources/Tg6LocalLifecycleReset.py")
+        node("sources/Tg6LocalLifecycleDestroy.py")
+        node("sources/Tg6LocalLifecycleDestroyMarkers.py")
+    }
 }

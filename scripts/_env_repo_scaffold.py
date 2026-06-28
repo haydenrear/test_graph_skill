@@ -289,6 +289,7 @@ case "$cmd" in
     mkdir -p .terraform
     ;;
   apply)
+    rm -rf "generated/${target}"
     mkdir -p "generated/${target}"
     printf 'apiVersion: v1\\nkind: Config\\ncurrent-context: %s\\n' "$kubecontext" > "generated/${target}/kubeconfig"
     printf '%s\\n' "$backend" > "generated/${target}/backend"

@@ -21,7 +21,11 @@ def reset_markers(report_dir: Path, environment_id: str, run_id: str) -> list[Pa
     reset_dir = provisioning_state_root(report_dir) / "reset"
     if not reset_dir.is_dir():
         return []
-    return sorted(reset_dir.glob(f"{environment_id}__{run_id}__*.json"))
+    return [
+        path
+        for path in sorted(reset_dir.glob(f"{environment_id}__*.json"))
+        if read_json(path).get("runId") == run_id
+    ]
 
 
 def deployed_marker(report_dir: Path, environment_id: str) -> Path:
@@ -36,11 +40,28 @@ def destroy_request_markers(report_dir: Path, environment_id: str, run_id: str) 
     request_dir = provisioning_state_root(report_dir) / "destroy-requested"
     if not request_dir.is_dir():
         return []
-    return sorted(request_dir.glob(f"{environment_id}__{run_id}__*.json"))
+    return [
+        path
+        for path in sorted(request_dir.glob(f"{environment_id}__*.json"))
+        if read_json(path).get("runId") == run_id
+    ]
 
 
 def read_json(path: Path) -> dict:
     return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def envelope(report_dir: Path, node_id: str) -> dict:
+    return read_json(report_dir / "envelope" / f"{node_id}.json")
+
+
+def environment_repository_execution(report_dir: Path, node_id: str) -> dict:
+    return envelope(report_dir, node_id).get("environmentRepositoryExecution", {})
+
+
+def environment_repository_command_labels(report_dir: Path, node_id: str) -> set[str]:
+    execution = environment_repository_execution(report_dir, node_id)
+    return {command.get("label", "") for command in execution.get("commands", [])}
 
 
 def ticket_plan_text() -> str:

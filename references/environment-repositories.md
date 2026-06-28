@@ -167,6 +167,17 @@ files, generated repository contents, OpenTofu outputs, kubeconfig paths,
 context projection, and application health/reachability. Do not rely only on a
 node process exit code.
 
+Current local validation graphs:
+
+- `environmentRepositoryLocalLifecycle` provisions a missing local-preview
+  environment, deploys into the existing environment without rerunning apply,
+  resets application state while keeping the provisioned environment, and
+  validates skip-destroy keep-alive behavior.
+- `environmentRepositoryLocalLifecycleDestroy` is guarded by default. Without
+  destroy intent it proves no destroy runtime is invoked; with
+  `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` it validates `tofu destroy`,
+  destroy-requested markers, destroyed markers, and provisioned marker removal.
+
 ## Scaffold Scripts
 
 Use these scripts to create or extend an environment repository:
