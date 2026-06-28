@@ -36,6 +36,22 @@ class PlanExecutorResumeHarnessTest {
         )
     }
 
+    @Test
+    fun publishedObjectRangeFindsTopLevelKeyOutsideEarlierStrings() {
+        val envelope = """
+            {"nodeId":"env","log":"before \"published\": {\"bad\":\"}\"}","published":{"path":"ok"},"status":"passed"}
+        """.trimIndent()
+
+        val range = jsonObjectValueRange(envelope, "\"published\"")
+            ?: error("expected published object range")
+        val updated = envelope.replaceRange(range, "\"published\":{\"EnvironmentId\":\"env-1\"}")
+
+        assertEquals(
+            """{"nodeId":"env","log":"before \"published\": {\"bad\":\"}\"}","published":{"EnvironmentId":"env-1"},"status":"passed"}""",
+            updated,
+        )
+    }
+
     @Ignore("Harness placeholder for TG-3C/TG-3D integration-level executor tests.")
     @Test
     fun resumePlanExecutesFromSelectedNodeAndContinuesDownstream() {

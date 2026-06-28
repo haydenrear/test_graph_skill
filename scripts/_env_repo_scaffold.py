@@ -65,9 +65,20 @@ def target_template(target: str) -> TargetTemplate:
         raise ValueError(f"unsupported target {target!r}; expected one of: {valid}") from exc
 
 
-def write_file(path: Path, text: str, *, force: bool = False, executable: bool = False) -> bool:
+def write_file(
+    path: Path,
+    text: str,
+    *,
+    force: bool = False,
+    executable: bool = False,
+    preserve_existing: bool = False,
+) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
+        if preserve_existing:
+            if executable:
+                make_executable(path)
+            return False
         existing = path.read_text(encoding="utf-8")
         if existing == text:
             if executable:
@@ -86,7 +97,13 @@ def make_executable(path: Path) -> None:
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def ensure_repository(repo_root: Path, template: str, *, force: bool = False) -> list[Path]:
+def ensure_repository(
+    repo_root: Path,
+    template: str,
+    *,
+    force: bool = False,
+    preserve_existing: bool = False,
+) -> list[Path]:
     repo_root.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
     for relative, text in {
@@ -97,14 +114,14 @@ def ensure_repository(repo_root: Path, template: str, *, force: bool = False) ->
         f"templates/{normalize_template(template)}/outputs.tf": outputs_tf_text(),
     }.items():
         path = repo_root / relative
-        if write_file(path, text, force=force):
+        if write_file(path, text, force=force, preserve_existing=preserve_existing):
             created.append(path)
     return created
 
 
 def add_environment_template(repo_root: Path, template: str, target: str, *, force: bool = False) -> Path:
     selected = target_template(target)
-    ensure_repository(repo_root, template, force=False)
+    ensure_repository(repo_root, template, preserve_existing=True)
     path = template_path(repo_root, template) / selected.filename
     write_file(path, target_tf_text(selected), force=force)
     return path

@@ -8,17 +8,52 @@ import java.io.File
 import java.time.Instant
 
 internal fun jsonObjectValueRange(json: String, key: String): IntRange? {
-    val keyIndex = json.indexOf(key)
-    if (keyIndex < 0) return null
-    val colon = json.indexOf(':', keyIndex)
-    if (colon < 0) return null
-    val braceStart = json.indexOf('{', colon)
-    if (braceStart < 0) return null
-
     var depth = 0
     var inString = false
     var escaped = false
-    var end = -1
+    var i = 0
+    while (i < json.length) {
+        val ch = json[i]
+        if (inString) {
+            when {
+                escaped -> escaped = false
+                ch == '\\' -> escaped = true
+                ch == '"' -> inString = false
+            }
+            i++
+            continue
+        }
+
+        when (ch) {
+            '{' -> depth++
+            '}' -> depth--
+            '"' -> {
+                if (depth == 1 && json.startsWith(key, i)) {
+                    val colon = json.indexOf(':', i + key.length)
+                    if (colon < 0) return null
+                    val braceStart = firstNonWhitespace(json, colon + 1)
+                    if (braceStart >= json.length || json[braceStart] != '{') return null
+                    val end = jsonObjectEnd(json, braceStart) ?: return null
+                    return i..end
+                }
+                inString = true
+            }
+        }
+        i++
+    }
+    return null
+}
+
+private fun firstNonWhitespace(json: String, start: Int): Int {
+    var i = start
+    while (i < json.length && json[i].isWhitespace()) i++
+    return i
+}
+
+private fun jsonObjectEnd(json: String, braceStart: Int): Int? {
+    var depth = 0
+    var inString = false
+    var escaped = false
     for (i in braceStart until json.length) {
         val ch = json[i]
         if (inString) {
@@ -34,15 +69,11 @@ internal fun jsonObjectValueRange(json: String, key: String): IntRange? {
             '{' -> depth++
             '}' -> {
                 depth--
-                if (depth == 0) {
-                    end = i
-                    break
-                }
+                if (depth == 0) return i
             }
         }
     }
-    if (end < 0) return null
-    return keyIndex..end
+    return null
 }
 
 /**

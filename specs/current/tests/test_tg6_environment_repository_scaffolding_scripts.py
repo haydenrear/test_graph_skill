@@ -63,12 +63,20 @@ def test_scaffold_env_adds_targets_without_clobbering_existing_templates(tmp_pat
     run_script("scaffold-tf-env.py", str(repo))
 
     local_tf = repo / "templates" / "branch-preview" / "local.tf"
+    readme = repo / "README.md"
+    main_tf = repo / "templates" / "branch-preview" / "main.tf"
     before = local_tf.read_text(encoding="utf-8")
+    readme_custom = readme.read_text(encoding="utf-8") + "\nCustom operator notes.\n"
+    main_custom = main_tf.read_text(encoding="utf-8") + "\n# custom provider wiring\n"
+    readme.write_text(readme_custom, encoding="utf-8")
+    main_tf.write_text(main_custom, encoding="utf-8")
 
     run_script("scaffold-env.py", str(repo), "--target", "local-github-action")
     run_script("scaffold-env.py", str(repo), "--target", "aws-preview")
 
     assert local_tf.read_text(encoding="utf-8") == before
+    assert readme.read_text(encoding="utf-8") == readme_custom
+    assert main_tf.read_text(encoding="utf-8") == main_custom
     assert (repo / "templates" / "branch-preview" / "local-github-action.tf").is_file()
     assert (repo / "templates" / "branch-preview" / "aws.tf").is_file()
 
