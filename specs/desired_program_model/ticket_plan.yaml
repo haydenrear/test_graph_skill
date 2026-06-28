@@ -82,21 +82,15 @@ tickets:
       Make environment repositories a first-class documented skill surface with
       a dedicated reference, expected repository shape, execution contract,
       target/backend semantics, lifecycle behavior, and a local k3d setup path.
-    desired_actions:
-      - ScaffoldEnvironmentRepository
-      - ScaffoldEnvironmentTemplate
+    desired_actions: []
     implementation_scope:
       - SKILL.md
       - references/environment-repositories.md
       - references/reference.md
       - references/workflows.md
     current_increment:
-      model_state:
-        - environment_repository_scaffolded
-        - scaffolded_environment_templates
-      model_actions:
-        - ScaffoldEnvironmentRepository
-        - ScaffoldEnvironmentTemplate
+      model_state: []
+      model_actions: []
       adapters:
         - EnvironmentRepositoryReferenceAdapter
       unit_tests:

@@ -46,7 +46,9 @@ def read_json(path: Path) -> dict:
 def ticket_plan_text() -> str:
     active = REPO_ROOT / "specs/desired_program_model/ticket_plan.yaml"
     if active.is_file():
-        return active.read_text(encoding="utf-8")
+        text = active.read_text(encoding="utf-8")
+        if "id: TG-5" in text:
+            return text
 
     closed = (
         REPO_ROOT

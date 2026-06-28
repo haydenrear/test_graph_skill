@@ -90,6 +90,28 @@ def test_tg6_functionality_tickets_require_test_graph_coverage() -> None:
         assert "assertions:" in ticket
 
 
+def test_tg6a_docs_ticket_does_not_claim_scaffolding_has_landed() -> None:
+    plan = (SPEC_ROOT / "ticket_plan.yaml").read_text(encoding="utf-8")
+    start = plan.index("  - id: TG-6A")
+    end = plan.index("\n  - id: TG-6B", start)
+    tg6a = plan[start:end]
+
+    assert "desired_actions: []" in tg6a
+    assert "model_state: []" in tg6a
+    assert "model_actions: []" in tg6a
+    assert "ScaffoldEnvironmentRepository" not in tg6a
+    assert "ScaffoldEnvironmentTemplate" not in tg6a
+
+
+def test_tg5_graph_helpers_ignore_active_tg6_ticket_plan() -> None:
+    harness = (REPO_ROOT / "test_graph/support/branch_environment_harness.py").read_text(encoding="utf-8")
+    workflow_record = (REPO_ROOT / "test_graph/sources/Tg5DeployCdcIssueWorkflowRecord.py").read_text(encoding="utf-8")
+
+    assert 'if "id: TG-5" in text:' in harness
+    assert "active_tg5_ticket_plan" in workflow_record
+    assert 'if "id: TG-5G" in plan.read_text' in workflow_record
+
+
 def test_tg6_current_model_remains_accepted_tg5_baseline_until_implementation() -> None:
     current_tla = (REPO_ROOT / "specs/current/TestGraph.tla").read_text(encoding="utf-8")
     current_manifest = (REPO_ROOT / "specs/current/spec_manifest.yaml").read_text(encoding="utf-8")

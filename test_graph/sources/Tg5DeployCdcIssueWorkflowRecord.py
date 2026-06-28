@@ -26,8 +26,13 @@ SPEC = (
 )
 
 
-def active_ticket_plan() -> Path:
-    return REPO_ROOT / "specs" / "desired_program_model" / "ticket_plan.yaml"
+def active_tg5_ticket_plan() -> Path | None:
+    plan = REPO_ROOT / "specs" / "desired_program_model" / "ticket_plan.yaml"
+    if not plan.is_file():
+        return None
+    if "id: TG-5G" in plan.read_text(encoding="utf-8"):
+        return plan
+    return None
 
 
 def closed_snapshot_manifest() -> Path:
@@ -40,11 +45,11 @@ def latest_ticket_snapshot_manifest() -> Path:
 
 @node(SPEC)
 def main(ctx):
-    plan = active_ticket_plan()
+    plan = active_tg5_ticket_plan()
     closed = closed_snapshot_manifest()
     ticket_snapshot = latest_ticket_snapshot_manifest()
 
-    if plan.is_file():
+    if plan is not None:
         text = plan.read_text(encoding="utf-8")
         return (
             NodeResult.pass_(ctx.node_id)
