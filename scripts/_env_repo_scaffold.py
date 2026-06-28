@@ -313,17 +313,17 @@ esac
 def python_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
     return {
         "deploy_cluster.py": python_lifecycle_template(
-            "branch.environment.deploy-cluster",
+            "branch.environment.python.deploy-cluster",
             "deploy_cluster",
             f'"{target.target}", "{target.backend}"',
         ),
         "reset_node.py": python_lifecycle_template(
-            "branch.environment.reset-node",
+            "branch.environment.python.reset-node",
             "reset_node",
             f'"{target.target}", "{target.backend}"',
         ),
         "delete_cluster.py": python_lifecycle_template(
-            "branch.environment.delete-cluster",
+            "branch.environment.python.delete-cluster",
             "delete_cluster",
             f'"{target.target}", "{target.backend}", destroy_requested=False',
         ),
@@ -364,17 +364,17 @@ def java_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
     return {
         "DeployCluster.java": java_lifecycle_template(
             "DeployCluster",
-            "branch.environment.deploy-cluster",
+            "branch.environment.java.deploy-cluster",
             f'ClusterLifecycle.deployCluster("{target.target}", "{target.backend}", false)',
         ),
         "ResetNode.java": java_lifecycle_template(
             "ResetNode",
-            "branch.environment.reset-node",
+            "branch.environment.java.reset-node",
             f'ClusterLifecycle.resetNode("{target.target}", "{target.backend}", false, false)',
         ),
         "DeleteCluster.java": java_lifecycle_template(
             "DeleteCluster",
-            "branch.environment.delete-cluster",
+            "branch.environment.java.delete-cluster",
             f'ClusterLifecycle.deleteCluster("{target.target}", "{target.backend}", false)',
         ),
     }

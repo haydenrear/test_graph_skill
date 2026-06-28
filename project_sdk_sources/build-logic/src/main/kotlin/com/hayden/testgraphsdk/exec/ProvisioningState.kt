@@ -2,6 +2,7 @@ package com.hayden.testgraphsdk.exec
 
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import java.io.File
+import java.security.MessageDigest
 import java.time.Instant
 
 internal data class BranchEnvironmentIdentity(
@@ -108,14 +109,14 @@ internal class ProvisioningState(
         } else null
 
         val resetMarker = if ("reset" in prepared.actions) {
-            marker("reset", "${identity.id}__${safeRunNode(spec)}").also {
+            marker("reset", runScopedMarkerName(identity, spec)).also {
                 writeMarker(it, identity, spec, timestamp, "reset")
                 markerFile("deployed", identity.id).delete()
             }
         } else null
 
         val destroyRequestMarker = if ("destroy" in prepared.actions) {
-            marker("destroy-requested", "${identity.id}__${safeRunNode(spec)}").also {
+            marker("destroy-requested", runScopedMarkerName(identity, spec)).also {
                 writeMarker(it, identity, spec, timestamp, "destroy-requested")
             }
         } else null
@@ -188,8 +189,14 @@ internal class ProvisioningState(
     private fun markerFile(kind: String, name: String): File =
         File(File(stateRoot, kind), "$name.json")
 
-    private fun safeRunNode(spec: ValidationNodeSpec): String =
-        BranchEnvironmentIdentity.safeSegment("${runId}__${spec.id}")
+    private fun runScopedMarkerName(identity: BranchEnvironmentIdentity, spec: ValidationNodeSpec): String =
+        "${identity.id}__run-${shortHash("${runId}__${spec.id}")}"
+
+    private fun shortHash(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+            .take(16)
 
     private fun writeMarker(
         file: File,

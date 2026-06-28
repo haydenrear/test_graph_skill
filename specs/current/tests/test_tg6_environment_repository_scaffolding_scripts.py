@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -113,3 +114,18 @@ def test_scaffold_env_can_add_lifecycle_node_templates(tmp_path: Path) -> None:
         assert needle in text
         assert "aws-preview" in text
         assert "aws" in text
+
+    ids = []
+    for filename in expected:
+        text = (sources / filename).read_text(encoding="utf-8")
+        ids.extend(re.findall(r'NodeSpec(?:\.of)?\("([^"]+)"', text))
+
+    assert sorted(ids) == [
+        "branch.environment.java.delete-cluster",
+        "branch.environment.java.deploy-cluster",
+        "branch.environment.java.reset-node",
+        "branch.environment.python.delete-cluster",
+        "branch.environment.python.deploy-cluster",
+        "branch.environment.python.reset-node",
+    ]
+    assert len(ids) == len(set(ids))

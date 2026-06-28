@@ -88,6 +88,37 @@ class ProvisioningStateTest {
     }
 
     @Test
+    fun runScopedResetMarkerUsesShortFilenameButKeepsFullAuditBody() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val state = ProvisioningState(
+            projectDir = projectDir,
+            graphName = "environmentRepositoryGithubActionLifecycle",
+            runId = "20260628-200941",
+            env = baseEnv() + ("TEST_GRAPH_FEATURE_BRANCH" to "feature/tg-5-branch-environment-repositories"),
+        )
+        val reset = environmentRepositoryNode(
+            "tg6.github-action.lifecycle.reset",
+            EnvironmentRepositorySpec(
+                source = "git@example.invalid:env.git",
+                template = "templates/branch-preview",
+                target = "local-github-action",
+                backend = "github-action",
+            ),
+            "environment:reset",
+        )
+
+        val record = assertNotNull(state.recordSuccessful(reset, state.prepare(reset), "passed"))
+        val marker = assertNotNull(record.resetMarker)
+        val body = marker.readText()
+
+        assertTrue(marker.name.length < 255)
+        assertTrue(marker.name.startsWith("${record.identity.id}__run-"))
+        assertTrue(body.contains("\"runId\": \"20260628-200941\""))
+        assertTrue(body.contains("\"nodeId\": \"tg6.github-action.lifecycle.reset\""))
+        assertTrue(body.contains("\"environmentId\": \"${record.identity.id}\""))
+    }
+
+    @Test
     fun destroyRequiresExplicitIntentAndRemovesProvisionedMarkerOnlyOnSuccess() {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val provisionState = state(projectDir)
