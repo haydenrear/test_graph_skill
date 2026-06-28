@@ -1,14 +1,14 @@
 module: TestGraph
-package: testgraph_program_cases
+package: desired_program_cases
 
 status:
-  workflow: closed
+  workflow: ticket
   workflow_name: environment-repository-scaffolding-polyglot-lifecycle
   initial_ticket: TG-6
   initial_ticket_title: "Environment repository scaffolding and polyglot lifecycle validation"
-  closed_history: ../.history/environment-repository-scaffolding-polyglot-lifecycle/closed-snapshot
-  relation_to_program_model: accepted_program_model
-  relation_to_current: converged_and_promoted
+  ticket_plan: ticket_plan.yaml
+  relation_to_program_model: desired_successor_of_accepted_program_model
+  relation_to_current: target_state_for_specs_current_to_converge_to
   current_model_rule: whole_program_working_copy_not_ticket_projection
   test_modeling_rule: do_not_model_tests_or_validation_harnesses_as_program_behavior
   updated: "2026-06-28"
@@ -27,12 +27,7 @@ status:
     - TG-6D added Java/JBang environment repository provision and context projection parity graph coverage.
     - TG-6E added local lifecycle validation graphs for missing provision, existing deploy reuse, reset, skip-destroy, and explicit destroy.
     - TG-6F added GitHub Actions and guarded AWS lifecycle validation graphs with uv and JBang assertions for missing provision, reuse, reset, skip-destroy, explicit destroy, and no-cloud AWS guard behavior.
-    - TG-6 desired/current model converged and was promoted into specs/program_model.
   completed_slices:
-    - tg6a_environment_repository_reference_landed
-    - tg6b_environment_repository_scaffolding_landed
-    - tg6c_lifecycle_node_templates_landed
-    - tg6d_jbang_environment_context_landed
     - tg6e_local_lifecycle_validation_landed
     - tg6f_guarded_lifecycle_validation_landed
   accepted_baseline:
@@ -68,7 +63,8 @@ status:
     carried_forward_validation:
       - deployCdcIssueContract
   pending:
-    - Add executable adapter mappings for environment repository scaffolding and lifecycle boundaries in a future workflow.
+    - Close TG-6F with spec-double-compiler history after validation evidence is recorded.
+    - After review of the converged current/desired model, promote and close the whole TG-6 workflow.
   baseline_validation:
     graph:
       - ./scripts/run.py --all --test-graph-root test_graph

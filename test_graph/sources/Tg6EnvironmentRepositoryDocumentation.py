@@ -17,7 +17,17 @@ REFERENCE_PATH = REPO_ROOT / "references" / "environment-repositories.md"
 SKILL_PATH = REPO_ROOT / "SKILL.md"
 REFERENCE_SUMMARY_PATH = REPO_ROOT / "references" / "reference.md"
 WORKFLOWS_PATH = REPO_ROOT / "references" / "workflows.md"
-TICKET_PLAN_PATH = REPO_ROOT / "specs" / "desired_program_model" / "ticket_plan.yaml"
+ACTIVE_TICKET_PLAN_PATH = REPO_ROOT / "specs" / "desired_program_model" / "ticket_plan.yaml"
+HISTORY_TICKET_PLAN_PATH = (
+    REPO_ROOT
+    / "specs"
+    / ".history"
+    / "environment-repository-scaffolding-polyglot-lifecycle"
+    / "closed-snapshot"
+    / "snapshots"
+    / "desired_program_model"
+    / "ticket_plan.yaml"
+)
 
 SPEC = (
     NodeSpec("tg6.environment.repository.documentation")
@@ -31,6 +41,12 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
+def _ticket_plan_text() -> str:
+    if ACTIVE_TICKET_PLAN_PATH.is_file():
+        return _text(ACTIVE_TICKET_PLAN_PATH)
+    return _text(HISTORY_TICKET_PLAN_PATH)
+
+
 @node(SPEC)
 def main(ctx):
     reference = _text(REFERENCE_PATH)
@@ -38,7 +54,7 @@ def main(ctx):
     skill = _text(SKILL_PATH)
     reference_summary = _text(REFERENCE_SUMMARY_PATH)
     workflows = _text(WORKFLOWS_PATH)
-    ticket_plan = _text(TICKET_PLAN_PATH)
+    ticket_plan = _ticket_plan_text()
 
     result = (
         NodeResult.pass_(ctx.node_id)
