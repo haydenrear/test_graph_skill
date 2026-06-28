@@ -325,12 +325,21 @@ def python_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
         "delete_cluster.py": python_lifecycle_template(
             "branch.environment.python.delete-cluster",
             "delete_cluster",
-            f'"{target.target}", "{target.backend}", destroy_requested=False',
+            f'"{target.target}", "{target.backend}", destroy_requested=destroy_requested()',
+            imports="import os\n",
+            helpers="""DESTROY_KEYS = ("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")
+
+
+def destroy_requested() -> bool:
+    return any(os.environ.get(key, "").lower() in {"1", "true", "yes", "y"} for key in DESTROY_KEYS)
+
+
+""",
         ),
     }
 
 
-def python_lifecycle_template(node_id: str, function: str, args: str) -> str:
+def python_lifecycle_template(node_id: str, function: str, args: str, imports: str = "", helpers: str = "") -> str:
     return f"""# /// script
 # requires-python = ">=3.10"
 # dependencies = ["testgraphsdk"]
@@ -340,12 +349,14 @@ def python_lifecycle_template(node_id: str, function: str, args: str) -> str:
 # ///
 from __future__ import annotations
 
+{imports}\
 from testgraphsdk import NodeResult, NodeSpec, {function}, node
 
 
 SPEC = NodeSpec("{node_id}").kind("action").tags("environment", "lifecycle")
 
 
+{helpers}\
 @node(SPEC)
 def main(ctx):
     plan = {function}({args})
@@ -375,12 +386,23 @@ def java_lifecycle_templates(target: TargetTemplate) -> dict[str, str]:
         "DeleteCluster.java": java_lifecycle_template(
             "DeleteCluster",
             "branch.environment.java.delete-cluster",
-            f'ClusterLifecycle.deleteCluster("{target.target}", "{target.backend}", false)',
+            f'ClusterLifecycle.deleteCluster("{target.target}", "{target.backend}", destroyRequested())',
+            helpers="""    private static boolean destroyRequested() {
+        for (String key : new String[] {"TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT"}) {
+            String value = System.getenv(key);
+            if (value != null && java.util.Set.of("1", "true", "yes", "y").contains(value.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+""",
         ),
     }
 
 
-def java_lifecycle_template(class_name: str, node_id: str, expression: str) -> str:
+def java_lifecycle_template(class_name: str, node_id: str, expression: str, helpers: str = "") -> str:
     return f"""///usr/bin/env jbang "$0" "$@" ; exit $?
 //SOURCES ../sdk/java/src/main/java/com/hayden/testgraphsdk/sdk/*.java
 
@@ -397,6 +419,7 @@ public class {class_name} {{
             .kind(NodeSpec.Kind.ACTION)
             .tags("environment", "lifecycle");
 
+{helpers}\
     public static void main(String[] args) {{
         Node.run(args, SPEC, ctx -> {{
             ClusterLifecyclePlan plan = {expression};
