@@ -28,6 +28,27 @@ class ProvisioningStateTest {
     }
 
     @Test
+    fun branchEnvironmentIdsPreserveDistinctBranchNames() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val slashState = state(
+            projectDir,
+            env = baseEnv() + ("TEST_GRAPH_FEATURE_BRANCH" to "feature/foo"),
+        )
+        val dashState = state(
+            projectDir,
+            env = baseEnv() + ("TEST_GRAPH_FEATURE_BRANCH" to "feature-foo"),
+        )
+        val provision = node("environment.provision", "environment:provision")
+
+        val slashId = assertNotNull(slashState.prepare(provision)).identity.id
+        val dashId = assertNotNull(dashState.prepare(provision)).identity.id
+
+        assertTrue(slashId.contains("~666561747572652f666f6f"))
+        assertTrue(dashId.contains("feature-foo"))
+        assertFalse(slashId == dashId)
+    }
+
+    @Test
     fun failedProvisionDoesNotWriteMarker() {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val state = state(projectDir)

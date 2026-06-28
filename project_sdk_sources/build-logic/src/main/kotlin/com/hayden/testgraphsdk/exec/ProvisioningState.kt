@@ -14,12 +14,16 @@ internal data class BranchEnvironmentIdentity(
         .joinToString("__") { safeSegment(it) }
 
     companion object {
-        fun safeSegment(value: String): String =
-            value.trim()
-                .ifEmpty { "default" }
-                .replace(Regex("[^A-Za-z0-9._-]+"), "-")
-                .trim('.', '-', '_')
-                .ifEmpty { "default" }
+        private val simpleSegment = Regex("[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+        fun safeSegment(value: String): String {
+            val trimmed = value.trim()
+            if (trimmed.isEmpty()) return "~"
+            if (simpleSegment.matches(trimmed) && "__" !in trimmed) return trimmed
+            return "~" + trimmed.encodeToByteArray().joinToString("") { byte ->
+                "%02x".format(byte.toInt() and 0xff)
+            }
+        }
     }
 }
 
