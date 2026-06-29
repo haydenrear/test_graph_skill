@@ -14,7 +14,7 @@ from pathlib import Path
 from testgraphsdk import NodeResult, node
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from tg6_lifecycle_support import AWS, aws_guard_reason, aws_lifecycle_enabled, destroy_requested, lifecycle_spec
+from tg6_lifecycle_support import AWS, aws_guard_reason, aws_lifecycle_enabled, destroy_intent_absent_or_falsey, destroy_requested, lifecycle_spec
 
 
 ENABLED = aws_lifecycle_enabled() and destroy_requested()
@@ -49,7 +49,7 @@ def main(ctx):
 
     return (
         NodeResult.pass_(ctx.node_id)
-        .assertion("destroy_requires_explicit_intent", requested or all(not os.environ.get(key) for key in ("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")))
+        .assertion("destroy_requires_explicit_intent", requested or destroy_intent_absent_or_falsey())
         .assertion("environment_id_available", bool(environment_id))
         .publish("destroyRequested", str(requested).lower())
         .publish("EnvironmentId", environment_id)

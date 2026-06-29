@@ -16,3 +16,7 @@ Promoted TG-6 environment repository scaffolding and lifecycle validation into t
 ## Follow-up
 
 Review this append-only entry, then commit the history directory with the related spec changes.
+
+Post-close review fixes:
+
+- `followups/001-destroy-guard-review-fix` captures the final scaffolded delete-node destroy guard assertions in closed history and documents false-like destroy variable handling.

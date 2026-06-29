@@ -115,6 +115,16 @@ def test_scaffold_env_can_add_lifecycle_node_templates(tmp_path: Path) -> None:
         assert "aws-preview" in text
         assert "aws" in text
 
+    python_delete = (sources / "delete_cluster.py").read_text(encoding="utf-8")
+    java_delete = (sources / "DeleteCluster.java").read_text(encoding="utf-8")
+    for text in [python_delete, java_delete]:
+        assert "TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT" in text
+        assert "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT" in text
+    assert "destroy_requested=destroy_requested()" in python_delete
+    assert "destroy_requested=False" not in python_delete
+    assert "destroyRequested()" in java_delete
+    assert 'ClusterLifecycle.deleteCluster("aws-preview", "aws", false)' not in java_delete
+
     ids = []
     for filename in expected:
         text = (sources / filename).read_text(encoding="utf-8")

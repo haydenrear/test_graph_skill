@@ -46,5 +46,6 @@ def test_tg6e_local_lifecycle_nodes_assert_external_runtime_evidence() -> None:
     assert "reset_reapplied_environment" in reset_markers
     assert "skip_destroy_keeps_environment_active" in skip_destroy
     assert "TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT" in destroy
+    assert "destroy_intent_absent_or_falsey" in destroy
     assert 'SideEffect.environment("destroy")' in destroy
     assert "destroy_ran_tofu_destroy" in destroy_markers

@@ -69,6 +69,10 @@ def destroy_requested() -> bool:
     return truthy_env(DESTROY_KEYS)
 
 
+def destroy_intent_absent_or_falsey() -> bool:
+    return all(os.environ.get(key, "").strip().lower() not in TRUTHY for key in DESTROY_KEYS)
+
+
 def aws_selected() -> bool:
     return truthy_env(AWS_SELECTION_KEYS)
 

@@ -25,6 +25,10 @@ def destroy_requested() -> bool:
     return any(os.environ.get(key, "").strip().lower() in TRUTHY for key in DESTROY_KEYS)
 
 
+def destroy_intent_absent_or_falsey() -> bool:
+    return all(os.environ.get(key, "").strip().lower() not in TRUTHY for key in DESTROY_KEYS)
+
+
 spec_builder = (
     NodeSpec("tg6.local.lifecycle.destroy")
     .kind("action")
@@ -46,7 +50,7 @@ def main(ctx):
     environment_id = ctx.get(RESET, "EnvironmentId") or os.environ.get("TEST_GRAPH_BRANCH_ENVIRONMENT_ID", "")
     return (
         NodeResult.pass_(ctx.node_id)
-        .assertion("destroy_requires_explicit_intent", requested or all(not os.environ.get(key) for key in DESTROY_KEYS))
+        .assertion("destroy_requires_explicit_intent", requested or destroy_intent_absent_or_falsey())
         .assertion("environment_id_available", bool(environment_id))
         .publish("destroyRequested", str(requested).lower())
         .publish("EnvironmentId", environment_id)

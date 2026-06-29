@@ -26,6 +26,10 @@ def destroy_requested() -> bool:
     return any(os.environ.get(key, "").strip().lower() in TRUTHY for key in DESTROY_KEYS)
 
 
+def destroy_intent_absent_or_falsey() -> bool:
+    return all(os.environ.get(key, "").strip().lower() not in TRUTHY for key in DESTROY_KEYS)
+
+
 spec_builder = (
     NodeSpec("tg5.environment.repository.destroy")
     .kind("action")
@@ -45,7 +49,7 @@ def main(ctx):
     requested = destroy_requested()
     return (
         NodeResult.pass_(ctx.node_id)
-        .assertion("destroy_guard_state_is_explicit", requested or all(not os.environ.get(key) for key in DESTROY_KEYS))
+        .assertion("destroy_guard_state_is_explicit", requested or destroy_intent_absent_or_falsey())
         .publish("destroyRequested", str(requested).lower())
     )
 

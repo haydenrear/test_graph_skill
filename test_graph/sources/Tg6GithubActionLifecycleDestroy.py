@@ -14,7 +14,7 @@ from pathlib import Path
 from testgraphsdk import NodeResult, node
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from tg6_lifecycle_support import GITHUB_ACTION, destroy_requested, lifecycle_spec
+from tg6_lifecycle_support import GITHUB_ACTION, destroy_intent_absent_or_falsey, destroy_requested, lifecycle_spec
 
 
 SPEC = lifecycle_spec(
@@ -35,7 +35,7 @@ def main(ctx):
     environment_id = ctx.get(GITHUB_ACTION.reset_node, "EnvironmentId") or os.environ.get("TEST_GRAPH_BRANCH_ENVIRONMENT_ID", "")
     return (
         NodeResult.pass_(ctx.node_id)
-        .assertion("destroy_requires_explicit_intent", requested or all(not os.environ.get(key) for key in ("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")))
+        .assertion("destroy_requires_explicit_intent", requested or destroy_intent_absent_or_falsey())
         .assertion("environment_id_available", bool(environment_id))
         .publish("destroyRequested", str(requested).lower())
         .publish("EnvironmentId", environment_id)

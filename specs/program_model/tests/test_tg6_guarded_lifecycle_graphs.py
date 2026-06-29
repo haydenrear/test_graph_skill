@@ -57,6 +57,7 @@ def test_tg6f_lifecycle_nodes_assert_target_backends_and_external_markers() -> N
     assert "github-action" in support
     assert "aws-preview" in support
     assert "TEST_GRAPH_RUN_AWS_LIFECYCLE" in support
+    assert "destroy_intent_absent_or_falsey" in support
     assert "AWS_PROFILE" in support
     assert "AWS_ACCESS_KEY_ID" in support
     assert "AWS_WEB_IDENTITY_TOKEN_FILE" in support
@@ -73,6 +74,7 @@ def test_tg6f_lifecycle_nodes_assert_target_backends_and_external_markers() -> N
     assert "SideEffect.environment(action)" in support
     assert "ENABLED = aws_lifecycle_enabled()" in aws_provision
     assert "ENABLED = aws_lifecycle_enabled() and destroy_requested()" in aws_destroy
+    assert "destroy_intent_absent_or_falsey()" in aws_destroy
     assert "aws_provision_runtime_not_invoked_when_guarded" in aws_markers
 
 
