@@ -177,16 +177,19 @@ internal class ProvisioningState(
             .mapNotNull { env[it]?.trim() }
             .firstOrNull { it.isNotEmpty() }
 
+    private fun truthyEnv(vararg keys: String): Boolean =
+        keys.asSequence()
+            .mapNotNull { env[it]?.trim()?.lowercase() }
+            .any { it in setOf("1", "true", "yes", "y") }
+
     private fun destroyRequested(): Boolean =
-        firstEnv("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")
-            ?.lowercase() in setOf("1", "true", "yes", "y")
+        truthyEnv("TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT", "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT")
 
     private fun awsCredentialsPresent(): Boolean =
         firstEnv("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_WEB_IDENTITY_TOKEN_FILE") != null
 
     private fun awsLifecycleSelected(): Boolean =
-        firstEnv("TEST_GRAPH_RUN_AWS_LIFECYCLE", "TESTGRAPH_RUN_AWS_LIFECYCLE")
-            ?.lowercase() in setOf("1", "true", "yes", "y")
+        truthyEnv("TEST_GRAPH_RUN_AWS_LIFECYCLE", "TESTGRAPH_RUN_AWS_LIFECYCLE")
 
     private fun BranchEnvironmentIdentity.requiresAwsCredentials(): Boolean =
         target.contains("aws", ignoreCase = true) || backend.contains("aws", ignoreCase = true)

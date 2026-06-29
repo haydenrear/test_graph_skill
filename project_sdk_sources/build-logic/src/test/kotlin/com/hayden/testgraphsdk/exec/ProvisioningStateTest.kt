@@ -154,6 +154,20 @@ class ProvisioningStateTest {
     }
 
     @Test
+    fun destroyIntentAliasesUseAnyTruthyValue() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val destroyState = state(
+            projectDir,
+            env = baseEnv() + mapOf(
+                "TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT" to "false",
+                "TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT" to "true",
+            ),
+        )
+
+        assertNotNull(destroyState.prepare(node("environment.destroy", "environment:destroy")))
+    }
+
+    @Test
     fun reprovisionClearsDestroyedMarker() {
         val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
         val provisionState = state(projectDir)
@@ -214,6 +228,22 @@ class ProvisioningStateTest {
             env = baseEnv() + mapOf(
                 "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
                 "TEST_GRAPH_RUN_AWS_LIFECYCLE" to "true",
+                "AWS_PROFILE" to "test",
+            ),
+        )
+
+        assertNotNull(credentialed.prepare(node("environment.provision", "environment:provision")))
+    }
+
+    @Test
+    fun awsSelectionAliasesUseAnyTruthyValue() {
+        val projectDir = Files.createTempDirectory("test-graph-provisioning").toFile()
+        val credentialed = state(
+            projectDir,
+            env = baseEnv() + mapOf(
+                "TEST_GRAPH_ENVIRONMENT_TARGET" to "aws-preview",
+                "TEST_GRAPH_RUN_AWS_LIFECYCLE" to "false",
+                "TESTGRAPH_RUN_AWS_LIFECYCLE" to "true",
                 "AWS_PROFILE" to "test",
             ),
         )
