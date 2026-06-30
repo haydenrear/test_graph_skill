@@ -165,6 +165,7 @@ internal object RunReportWriter {
         renderProcesses(sb, env["processes"])
         renderArtifacts(sb, env["artifacts"])
         renderPublished(sb, env["published"])
+        renderProvisioningState(sb, env["provisioningState"])
         renderInlineLogs(sb, env["logs"])
 
         // Captured node-process stdout pointer.
@@ -267,6 +268,25 @@ internal object RunReportWriter {
         sb.append("### Published context\n\n")
         for ((k, v) in map) {
             sb.append("- `").append(k).append("`: `").append(v).append("`\n")
+        }
+        sb.append('\n')
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun renderProvisioningState(sb: StringBuilder, raw: Any?) {
+        val map = (raw as? Map<*, *>) ?: return
+        if (map.isEmpty()) return
+        sb.append("### Provisioning state\n\n")
+        listOf("environmentId", "branch", "target", "backend").forEach { key ->
+            (map[key] as? String)?.let { sb.append("- `").append(key).append("`: `").append(it).append("`\n") }
+        }
+        (map["actions"] as? List<*>)?.takeIf { it.isNotEmpty() }?.let { actions ->
+            sb.append("- `actions`: `").append(actions.joinToString(",")).append("`\n")
+        }
+        listOf("provisionedMarker", "deployedMarker", "resetMarker", "destroyRequestMarker", "destroyedMarker").forEach { key ->
+            (map[key] as? String)?.let { path ->
+                sb.append("- `").append(key).append("`: [`").append(path).append("`](").append(path).append(")\n")
+            }
         }
         sb.append('\n')
     }

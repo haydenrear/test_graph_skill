@@ -36,6 +36,7 @@ data class NodeInvocation(
     val contextArg: String? = null,
     val resultOut: File,
     val stdoutLog: File,
+    val environment: Map<String, String> = emptyMap(),
     /**
      * Wall-clock budget for one attempt, parsed once from
      * [ValidationNodeSpec.timeout] by `PlanExecutor`. Executors enforce

@@ -28,6 +28,7 @@ class UvExecutor(private val uvPath: String) : ValidationExecutor {
             .directory(invocation.projectDir.asFile)
             .redirectErrorStream(true)
             .redirectOutput(invocation.stdoutLog)
+            .also { it.environment().putAll(invocation.environment) }
             .start()
         return awaitWithTimeout(process, invocation.timeoutMillis)
     }

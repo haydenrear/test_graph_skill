@@ -14,6 +14,20 @@ SDK surface.
   `build.gradle.kts` via `testGraph("name") { ... }`.
 - The DSL can add overlays with `.dependsOn(...)`, `.tags(...)`,
   `.timeout(...)`, `.cacheable(...)`, and `.sideEffects(...)`.
+- Side effects are a typed registry such as `browser`, `net:local`,
+  `process:gradle`, `env:[KEY]`, and `environment:provision`; invalid forms
+  fail during describe/plan validation before node execution starts.
+- Branch-environment marker state lives under
+  `build/testgraph-provisioning-state/`. Provision and reset markers are
+  written only after successful nodes. Deploy writes application lifecycle
+  state. Destroy requires `TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+  `TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true` and removes provisioned/deployed
+  markers only after the destroy node passes.
+- Environment repository metadata is declared through `NodeSpec` as a
+  provider-neutral Git repository contract. TG-5C validates source, template,
+  target/backend, branch scope, and required output keys; Git clone, OpenTofu,
+  env propagation, reset, and guarded destroy execution are covered by the SDK
+  contract fixture. AWS provisioning remains later adapter work.
 - Script-level `NodeSpec.rerun(false)` opts out of future direct-rerun
   guidance when replaying from saved context is unsafe.
 - Transitive dependencies are resolved from `sourcesDir("sources")` by matching
@@ -152,6 +166,35 @@ Every `testGraph("name")` registers a graph. The script metadata and DSL
 overlays are merged: collections are unioned, scalars are overridden by the DSL.
 The DSL can add constraints; it should not be used to hide script-declared
 dependencies.
+
+## Branch Environment Repository Contracts
+
+For branch-scoped environments, node metadata can declare an
+`environmentRepository` contract. Read
+[`environment-repositories.md`](environment-repositories.md) for the
+authoritative repository form, Git fixture policy, local k3d setup,
+target/backend semantics, lifecycle behavior, and required test graph coverage
+for local, GitHub Actions, and AWS targets.
+
+```python
+NodeSpec("preview.provision") \
+    .kind("testbed") \
+    .side_effects(SideEffect.environment("provision")) \
+    .environment_repository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview"))
+```
+
+Existing validation entry points:
+
+```bash
+./scripts/run.py generatedEnvironmentRepositoryFixture --test-graph-root test_graph
+./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
+./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
+TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
+./scripts/run.py environmentRepositoryDocumentation --test-graph-root test_graph
+```
 
 ## Discover and Plan
 

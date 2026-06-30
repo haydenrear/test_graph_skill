@@ -22,7 +22,8 @@ emitted JSON; no YAML sidecar.
 | `retries`      | integer                                                                     | no       | Extra executor attempts after timeouts only. Default: 0.       |
 | `rerun`        | boolean                                                                     | no       | Default: true. Controls whether failed-run guidance should offer direct rerun from saved input context. |
 | `cacheable`    | boolean                                                                     | no       | Default: false. Only true if the node is a pure function of its inputs. |
-| `sideEffects`  | list\<string\>                                                              | no       | Free-form: `browser`, `db:writes`, `fs:tmp`, `net:external`.   |
+| `sideEffects`  | list\<string\>                                                              | no       | Typed registry; see side effects below.                        |
+| `environmentRepository` | object                                                            | no       | Provider-neutral Git environment repository contract metadata.  |
 | `inputs`       | map\<string, type\>                                                         | no       | Typed inputs the node reads from context.                      |
 | `outputs`      | map\<string, type\>                                                         | no       | Typed outputs the node produces in its envelope.               |
 | `reports`      | object                                                                      | no       | See below.                                                     |
@@ -40,6 +41,11 @@ NodeSpec.of("login.smoke")
     .rerun(false)
     .cacheable(false)
     .sideEffects("browser")
+    .sideEffect(SideEffect.env("KUBECONFIG"))
+    .environmentRepository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview"))
     .input("baseUrl", "string")
     .output("success", "boolean")
     .junitXml()
@@ -57,6 +63,11 @@ NodeSpec("login.smoke") \
     .rerun(False) \
     .cacheable(False) \
     .side_effects("browser") \
+    .side_effects(SideEffect.env("KUBECONFIG")) \
+    .environment_repository(
+        EnvironmentRepository.of(
+            "git@github.com:example/environments.git",
+            "templates/local-preview")) \
     .input("baseUrl", "string") \
     .output("success", "boolean") \
     .junit_xml() \
@@ -78,6 +89,92 @@ Use `rerun(false)` only when replaying the node from the previous
 external mutations, one-shot tokens, claimed ports, or resources that cannot be
 reconstructed from the saved context. This is independent of `retries(...)`,
 which controls automatic retry after executor timeouts.
+
+### Side effects
+
+`sideEffects` are a typed registry, not arbitrary labels. The Java and Python
+SDKs validate them in describe mode, the Gradle DSL validates overlays, and the
+executor validates the loaded plan before starting any node subprocess. This
+keeps effectful graph behavior auditable and fail-fast.
+
+Current registered forms:
+
+| Form | Meaning |
+| --- | --- |
+| `browser` | Uses a browser or browser-like UI automation surface. |
+| `db:writes` | Writes database or durable fixture state. |
+| `fs:tmp` | Writes temporary filesystem state. |
+| `net:external` | Calls an external network service. |
+| `net:local` | Calls a local service or local cluster endpoint. |
+| `process:gradle` | Spawns Gradle or nested test-graph processes. |
+| `env:[KEY]` | Requests propagation of one context key as a downstream environment variable. |
+| `env:[*]` | Requests propagation of all eligible returned context keys. |
+| `environment:provision` | Declares a branch environment provisioning effect. |
+| `environment:reuse` | Declares reuse of an existing branch environment. |
+| `environment:deploy` | Declares application deployment into a branch environment. |
+| `environment:reset` | Declares reset for redeploy without cluster destruction. |
+| `environment:destroy` | Declares explicit merge-gated environment destruction. |
+
+TG-5A validates and carries this metadata. TG-5B adds framework-managed marker
+files for `environment:provision`, `environment:reset`, and
+`environment:destroy`. Environment repository execution supports provision,
+reuse, deploy, reset, guarded destroy, and downstream `env:[KEY]` / `env:[*]`
+projection. AWS provisioning remains future adapter work.
+
+Marker state lives under `build/testgraph-provisioning-state/`:
+
+| Directory | Meaning |
+| --- | --- |
+| `provisioned/<environment-id>.json` | A node with `environment:provision` passed and the branch environment is considered active. |
+| `deployed/<environment-id>.json` | A node with `environment:deploy` passed and application state is considered present. |
+| `reset/<environment-id>__<run-node>.json` | A reset was requested for redeploy; the provisioned marker remains in place. |
+| `destroy-requested/<environment-id>__<run-node>.json` | A destroy node had explicit destroy authorization. |
+| `destroyed/<environment-id>.json` | An authorized destroy node passed and the provisioned/deployed markers were removed. |
+
+Environment ids are branch-scoped:
+`<graph>__<branch>__<target>__<backend>`. The executor derives branch from
+`TEST_GRAPH_FEATURE_BRANCH`, `GITHUB_HEAD_REF`, `GITHUB_REF_NAME`, then
+`local`. Target defaults to `local-preview`; backend defaults to `local`.
+AWS target/backend selections fail fast unless `AWS_PROFILE`,
+`AWS_ACCESS_KEY_ID`, or `AWS_WEB_IDENTITY_TOKEN_FILE` is present.
+Destroy is refused before node execution unless
+`TEST_GRAPH_DESTROY_BRANCH_ENVIRONMENT=true` or
+`TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=true`.
+
+### Environment Repository Contract
+
+`environmentRepository` declares the Git repository contract used for
+branch-scoped environments. The authoritative contract, repository form,
+Git fixture policy, local k3d setup, lifecycle semantics, and required
+local/GitHub Actions/AWS graph coverage live in
+[`environment-repositories.md`](environment-repositories.md).
+
+The dense API shape is:
+
+```json
+{
+  "environmentRepository": {
+    "source": "git@github.com:example/environments.git",
+    "template": "templates/local-preview",
+    "target": "local-preview",
+    "backend": "local",
+    "branch": "feature",
+    "outputKeys": ["EnvironmentId", "KUBECONFIG", "KUBECONTEXT"]
+  }
+}
+```
+
+The executor validates this metadata, clones or reuses the source outside the
+application tree, runs the OpenTofu lifecycle inside the selected template, and
+publishes structured environment outputs into downstream context. Existing TG-5
+validation graphs remain:
+
+```bash
+./scripts/run.py generatedEnvironmentRepositoryFixture --test-graph-root test_graph
+./scripts/run.py environmentRepositoryContract --test-graph-root test_graph
+./scripts/run.py branchEnvironmentReset --test-graph-root test_graph
+TESTGRAPH_DESTROY_BRANCH_ENVIRONMENT=1 ./scripts/run.py branchEnvironmentMergeDestroy --test-graph-root test_graph
+```
 
 ## Gradle DSL
 

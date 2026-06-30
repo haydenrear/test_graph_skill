@@ -47,6 +47,7 @@ Open only the reference you need:
 
 - [`references/workflows.md`](references/workflows.md): normal operating guide - mental model, root detection, scaffolding, `discover.py`, `run.py --all`, node creation, graph composition, reports, symlink behavior, imports from user code, and authoring checklist.
 - [`references/reference.md`](references/reference.md): dense API/DSL/task reference - `NodeSpec`, `NodeResult`, context wire format, Gradle DSL, task names, toolchain properties, Java SDK, Python SDK.
+- [`references/environment-repositories.md`](references/environment-repositories.md): branch environment repository contract, Git fixture policy, required OpenTofu outputs, local k3d setup, target/backend semantics, and required local/GitHub Actions/AWS test graph coverage.
 - [`references/github-actions.md`](references/github-actions.md): generated GitHub Actions workflow, skill install, symlink repair/preserve modes, private installs, and options.
 - [`references/debug-python-uv-env.md`](references/debug-python-uv-env.md): troubleshooting Python/uv/Gradle environment mismatches, including `python` alias vs `python3`, uv node execution, and daemon-related "fails then passes" behavior.
 - [`references/tickets/`](references/tickets/): lightweight future-work notes.

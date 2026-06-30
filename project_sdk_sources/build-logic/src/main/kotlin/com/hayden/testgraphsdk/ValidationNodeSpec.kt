@@ -31,10 +31,14 @@ data class ValidationNodeSpec(
     val rerun: Boolean = true,
     val cacheable: Boolean = false,
     val sideEffects: Set<String> = emptySet(),
+    val environmentRepository: EnvironmentRepositorySpec? = null,
     val inputs: Map<String, String> = emptyMap(),
     val outputs: Map<String, String> = emptyMap(),
     val reports: ReportsSpec = ReportsSpec(),
-)
+) {
+    fun sideEffectSpecs(): Set<SideEffectSpec> =
+        SideEffectSpec.parseAll(sideEffects, "node '$id' sideEffects")
+}
 
 data class ReportsSpec(
     val structuredJson: Boolean = true,
