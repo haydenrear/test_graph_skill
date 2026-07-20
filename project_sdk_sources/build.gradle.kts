@@ -69,6 +69,11 @@ validationGraph {
         node("sources/RerunJavaProbe.java")
     }
 
+    testGraph("observabilitySmoke") {
+        node("sources/RerunDisabledProbe.py")
+        node("sources/RerunJavaProbe.java")
+    }
+
     testGraph("rerunGuidance") {
         node("sources/RerunGuidanceFailure.py")
     }

@@ -44,11 +44,21 @@ internal object RunReportWriter {
         if (!envelopeDir.isDirectory) return false
         val envelopeFiles = envelopeDir.listFiles { f -> f.extension == "json" }
             ?.sortedBy { it.name } ?: emptyList()
+        val traceId = envelopeFiles.firstNotNullOfOrNull { file ->
+            try {
+                (MiniJson.parse(file.readText()) as? Map<*, *>)?.get("traceId") as? String
+            } catch (_: Exception) {
+                null
+            }
+        }
 
         // 1. summary.json — machine-readable concatenation.
         val summarySb = StringBuilder()
         summarySb.append('{')
         summarySb.append("\"runId\":\"").append(runDir.name).append("\",")
+        if (traceId != null) {
+            summarySb.append("\"traceId\":\"").append(traceId).append("\",")
+        }
         summarySb.append("\"nodes\":[")
         envelopeFiles.forEachIndexed { i, f ->
             if (i > 0) summarySb.append(',')
@@ -63,11 +73,16 @@ internal object RunReportWriter {
             val obj = try { MiniJson.parse(raw) as? Map<*, *> } catch (e: Exception) { null }
             obj?.let { f to it }
         }
-        File(runDir, "report.md").writeText(renderReport(runDir.name, parsed))
+        val report = renderReport(runDir.name, traceId, parsed).trimEnd() + "\n"
+        File(runDir, "report.md").writeText(report)
         return true
     }
 
-    private fun renderReport(runId: String, envelopes: List<Pair<File, Map<*, *>>>): String {
+    private fun renderReport(
+        runId: String,
+        traceId: String?,
+        envelopes: List<Pair<File, Map<*, *>>>,
+    ): String {
         val sb = StringBuilder()
 
         // Roll-up counts so the report header tells the story at a glance.
@@ -88,7 +103,10 @@ internal object RunReportWriter {
         }
 
         sb.append("# Validation report — ").append(runId).append("\n\n")
-        sb.append("**Overall**: ").append(overall).append("  \n")
+        if (traceId != null) {
+            sb.append("**Trace ID**: `").append(traceId).append("`\n\n")
+        }
+        sb.append("**Overall**: ").append(overall).append("\n\n")
         sb.append("**Nodes**: ").append(total)
         sb.append(" (passed=").append(passed)
         sb.append(", failed=").append(failed)
@@ -150,7 +168,7 @@ internal object RunReportWriter {
             timingLines += "spawn exit code: $it"
         }
         if (timingLines.isNotEmpty()) {
-            sb.append(timingLines.joinToString(separator = "  \n")).append("\n\n")
+            sb.append(timingLines.joinToString(separator = "\n\n")).append("\n\n")
         }
 
         val inputContextPath = env["inputContextFile"] as? String
