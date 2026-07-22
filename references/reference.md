@@ -183,6 +183,7 @@ validationGraph {
     sourcesDir("sources")                // pool for transitive dep resolution
 
     testGraph("smoke") {
+        standardNode("monitoring.cluster.assert.ready")
         node("sources/user_seeded.py")   // explicit — describe runs at config time
 
         node("sources/LoginSmoke.java")
@@ -196,6 +197,12 @@ validationGraph {
     testGraph("quick") { … }             // registers another Gradle task
 }
 ```
+
+`standardNode("stable.dotted.id")` resolves the provider-owned
+`standard-nodes/stable_dotted_id.py` script shipped with the installed skill.
+The standard catalog is indexed before consumer `sourcesDir(...)` entries, so
+consumer scripts cannot shadow a standard node id. Like `node(...)`, the call
+returns a `NodeOverlay`.
 
 ### NodeOverlay surface
 

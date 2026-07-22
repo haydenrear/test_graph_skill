@@ -6,12 +6,12 @@ build files, example node scripts, Gradle wrapper) into a new
 ``test_graph/`` subdirectory under the given repo root. The target
 ``test_graph/`` must not already exist or must be empty.
 
-The ``sdk/`` and ``build-logic/`` subtrees are created as **symlinks**
-into the skill repo's ``project_sdk_sources/`` rather than copies, so
-upstream upgrades land in every consumer scaffold without rsync. Move
-or delete the skill repo and the symlinks dangle - that's the cost,
-and it's why the rest of the scaffold (sources/, build.gradle.kts,
-gradle wrapper, examples) stays as a copy: those are user-edited.
+The ``sdk/``, ``build-logic/``, and ``standard-nodes/`` subtrees are created
+as **symlinks** into the skill repo's ``project_sdk_sources/`` rather than
+copies, so upstream upgrades land in every consumer scaffold without rsync.
+Move or delete the skill repo and the symlinks dangle - that's the cost, and
+it's why the rest of the scaffold (sources/, build.gradle.kts, gradle wrapper,
+examples) stays as a copy: those are user-edited.
 
 Usage:
     scaffold.py <repo-root>
@@ -20,7 +20,7 @@ Usage:
 Example:
     scaffold.py ~/projects/myapp
         creates ~/projects/myapp/test_graph/ populated with the scaffold;
-        sdk/ and build-logic/ symlink into the skill repo.
+        sdk/, build-logic/, and standard-nodes/ symlink into the skill repo.
 """
 from __future__ import annotations
 
@@ -39,7 +39,9 @@ from _common import project_sdk_sources
 # rsync, no drift between project copies. The flip side: a moved or
 # deleted skill repo dangles every consumer's symlink, so don't blow
 # away the skill checkout while a project depends on it.
-SYMLINK_TARGETS = {"sdk", "build-logic"}
+SYMLINK_TARGETS = {"sdk", "build-logic", "standard-nodes"}
+PROVIDER_VALIDATION_BEGIN = "    // TEST-GRAPH-PROVIDER-VALIDATION-BEGIN\n"
+PROVIDER_VALIDATION_END = "    // TEST-GRAPH-PROVIDER-VALIDATION-END\n"
 
 
 def _ignore(dirname: str, names: list[str]) -> list[str]:
@@ -53,6 +55,23 @@ def _ignore(dirname: str, names: list[str]) -> list[str]:
     return list(skip)
 
 
+def _remove_provider_validation_sections(build_file: Path) -> None:
+    """Keep provider acceptance graphs out of newly scaffolded consumers."""
+    content = build_file.read_text(encoding="utf-8")
+    begin_count = content.count(PROVIDER_VALIDATION_BEGIN)
+    end_count = content.count(PROVIDER_VALIDATION_END)
+    if begin_count != end_count:
+        raise RuntimeError(
+            f"unbalanced provider-validation markers in {build_file}: "
+            f"{begin_count} begin, {end_count} end"
+        )
+    while PROVIDER_VALIDATION_BEGIN in content:
+        begin = content.index(PROVIDER_VALIDATION_BEGIN)
+        end = content.index(PROVIDER_VALIDATION_END, begin) + len(PROVIDER_VALIDATION_END)
+        content = content[:begin] + content[end:]
+    build_file.write_text(content, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -62,7 +81,7 @@ def main() -> int:
     parser.add_argument(
         "--copy-sdk",
         action="store_true",
-        help="Snapshot-copy sdk/ and build-logic/ instead of symlinking. "
+        help="Snapshot-copy sdk/, build-logic/, and standard-nodes/ instead of symlinking. "
              "Use when the consumer needs to be self-contained "
              "(detached environments, archives, Windows without "
              "developer-mode symlink permission).",
@@ -116,6 +135,10 @@ def main() -> int:
             shutil.copy2(child, dest)
 
     # Make gradlew executable (shutil.copy2 preserves perms on most FS, but not all).
+    build_file = target / "build.gradle.kts"
+    if build_file.is_file():
+        _remove_provider_validation_sections(build_file)
+
     gw = target / "gradlew"
     if gw.exists():
         gw.chmod(gw.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

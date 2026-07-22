@@ -16,8 +16,14 @@
 # skill-manager would then bundle them into $SKILL_MANAGER_HOME/bin/
 # even on machines where the project under validation already has its
 # own pinned versions on PATH.
+#
+# The shipped monitoring standard nodes are different: they invoke deploy-helm's
+# public `monitoring` launcher. The deploy-cdc unit reference installs that
+# prerequisite transitively without coupling the Test Graph SDK to provider code.
 
-skill_references = []
+skill_references = [
+  "github:haydenrear/deploy-cdc", # installs the deploy-helm skill and its monitoring CLI
+]
 
 [skill]
 name = "test-graph"
