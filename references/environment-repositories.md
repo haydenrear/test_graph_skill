@@ -10,6 +10,13 @@ The contract is provider-neutral. A deploy-helm repository can implement it,
 but the SDK and test graph validation must not import deploy-helm or depend on
 a deploy-helm worktree.
 
+The shipped `monitoring.cluster.ensure` and
+`monitoring.cluster.assert.ready` standard nodes deliberately do **not** use
+this contract. Their installed deploy-cdc `monitoring` CLI already owns the
+entire cluster, storage, Helm, and readiness lifecycle. Attaching
+`environmentRepository` metadata to those nodes would run an additional
+Git/OpenTofu prelude and create a second deployment authority.
+
 ## Node Contract
 
 Nodes declare an environment repository through `NodeSpec.environmentRepository`

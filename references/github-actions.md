@@ -45,6 +45,7 @@ directories in addition to `test_graph/**`.
 ```text
 test_graph/sdk
 test_graph/build-logic
+test_graph/standard-nodes
 ```
 
 Those links point into the installed test-graph skill, not into the consuming
@@ -57,7 +58,8 @@ The generated workflow does this in order:
 2. Prepare `SKILL_MANAGER_HOME`.
 3. Install `skill-manager`, JBang, and Python with Homebrew.
 4. Install the test-graph skill with `skill-manager install`.
-5. Resolve `test_graph/sdk` and `test_graph/build-logic`.
+5. Resolve `test_graph/sdk`, `test_graph/build-logic`, and
+   `test_graph/standard-nodes`.
 6. Run `discover.py` and `run.py`.
 7. Upload `test_graph/build/validation-reports/`.
 
@@ -75,6 +77,7 @@ rewrites the checkout symlinks in the Actions workspace to point at:
 ```text
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/sdk
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/build-logic
+$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/standard-nodes
 ```
 
 This is the most portable mode because it does not require the committed
