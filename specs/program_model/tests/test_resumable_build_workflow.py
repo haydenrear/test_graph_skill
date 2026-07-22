@@ -1,3 +1,5 @@
+import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -56,3 +58,19 @@ def test_nested_test_graph_has_four_rerun_nodes() -> None:
         "RunOnlyUv.py",
     ]:
         assert (REPO_ROOT / "test_graph/sources" / source).exists()
+
+
+def test_rerun_harness_keeps_collision_suffix_in_run_identity() -> None:
+    harness_path = REPO_ROOT / "test_graph/support/rerun_harness.py"
+    spec = importlib.util.spec_from_file_location("rerun_harness_test", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    try:
+        spec.loader.exec_module(harness)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    output = "testGraph 'smoke' run=20260722-070547-17 steps=1 fullPlanSteps=6"
+
+    assert harness.extract_run_ids(output) == {"smoke": "20260722-070547-17"}

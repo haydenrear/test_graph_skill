@@ -67,8 +67,35 @@ Each run writes under `build/validation-reports/<runId>/`:
 
 ```
 build/validation-reports/<runId>/
+  execution-scope.json         no-replace expected nodes + replay digest provenance
+  attempt-closure.json         closure-v2 exact evidence digest binding
+  trace-context.json           persisted W3C carrier
   envelope/<nodeId>.json      per-node envelope
   context/<nodeId>.input.json exact input Context[] for that node attempt
   summary.json                unified summary (written inline at end of run)
   report.md                   markdown rollup (same)
 ```
+
+Every `envelope/*.json` artifact uses the closed canonical
+`envelopeVersion: 1` schema. The executor validates it before immutable
+publication, and the same validator gates attempt closure, replay acquisition,
+and report regeneration; malformed or semantically contradictory envelope
+evidence is never replay-eligible or green.
+
+Report regeneration also verifies that closure v2 still matches the current
+scope, carrier, contexts, and envelopes. Missing or stale closure state is
+`ERRORED`. Report retention is bounded to 16 MiB each of aggregate envelope and
+context evidence plus 500,000 JSON structural tokens.
+
+The rerun/resume self-graphs treat the baseline closure as the source integrity
+anchor. They require a distinct fresh replay run, hash the source scope,
+closure, carrier, envelopes, exact input-context snapshots, summary, and report
+before and after replay, validate the target's v3 scope (including graph
+identity and replay provenance), and verify exact expected/observed node and
+context identities. Report integrity also reconstructs each node's ordered
+published-data prefix and checks a replay's selected context against its source
+snapshot. The self-graphs then run manual report regeneration to prove that
+verdict, contextual gold, scope, and trace identity remain unchanged.
+Replay sources are restricted to full, non-replay attempts whose complete
+ordered plan equals the current graph; the selected source context must equal
+the exact ordered prefix before the selected node.

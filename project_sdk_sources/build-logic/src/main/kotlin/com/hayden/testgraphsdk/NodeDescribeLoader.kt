@@ -1,5 +1,8 @@
 package com.hayden.testgraphsdk
 
+import com.hayden.testgraphsdk.exec.ExecutionOutcome
+import com.hayden.testgraphsdk.exec.PosixProcessGroupController
+import com.hayden.testgraphsdk.exec.awaitWithTimeout
 import java.io.File
 
 /**
@@ -21,12 +24,22 @@ internal object NodeDescribeLoader {
         val out = File.createTempFile("validation-describe-", ".json").apply { deleteOnExit() }
         val argv = invocationFor(runtime, file, tools) + "--describe-out=${out.absolutePath}"
 
-        val process = ProcessBuilder(argv)
+        val managedCommand = PosixProcessGroupController.wrap(argv)
+        val process = ProcessBuilder(managedCommand.arguments)
             .directory(projectDir)
             .redirectErrorStream(true)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .start()
-        val code = process.waitFor()
+        val outcome = awaitWithTimeout(process, DESCRIBE_TIMEOUT_MILLIS, managedCommand)
+        val code = when (outcome) {
+            is ExecutionOutcome.Completed -> outcome.exitCode
+            is ExecutionOutcome.ProcessContractViolation -> error(
+                "describe process contract failed for ${file.name}: ${outcome.reason}"
+            )
+            ExecutionOutcome.TimedOut -> error(
+                "describe timed out for ${file.name} after ${DESCRIBE_TIMEOUT_MILLIS}ms"
+            )
+        }
         if (code != 0) {
             error("describe failed for ${file.name} (exit=$code). " +
                     "Run directly to debug: ${argv.joinToString(" ")}")
@@ -105,4 +118,6 @@ internal object NodeDescribeLoader {
             ),
         )
     }
+
+    private const val DESCRIBE_TIMEOUT_MILLIS = 2 * 60 * 1000L
 }

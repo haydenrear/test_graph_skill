@@ -275,11 +275,17 @@ These are the underlying Gradle tasks.
 | `validationListGraphs`                  | List all registered graphs + their explicit nodes.   |
 | `validationPlanGraph --name=<graph>`    | Plan (topo table + dependency adjacency).            |
 | `validationGraphDot --name=<graph>`     | Emit graphviz DOT only (pipe-friendly).              |
-| `validationReport`                      | Re-render summary.json + report.md for every existing run dir (manual rebuild — graph tasks already write their own rollup inline). |
+| `validationReport [--run-id=<runId>]`   | Re-render one selected run, or every existing run when omitted (manual rebuild — graph tasks already write their own rollup inline). |
 
 `discover.py <graph>` wraps `validationPlanGraph` (for the human console output) and `validationGraphDot` (for `docs/<graph>.dot`), and renders `docs/<graph>.png` if `dot` is on PATH.
 
 `run.py --all` wraps `validationRunAll`.
+
+Prefer `validationReport --run-id=<runId>` when a report root contains
+pre-closure or pre-scope historical attempts. The default all-run mode remains
+available for migration/audit, but those older attempts intentionally
+regenerate as `legacy-unknown`/`ERRORED`; automatic version-aware filtering is
+a compatibility follow-up, not part of the current trust contract.
 
 Graph tasks accept resume options for a single graph:
 
@@ -294,8 +300,15 @@ Use `--resume-from-build` with exactly one node selector:
 graph plan, must have `rerun=true`, and its saved input context must contain all
 of its declared dependencies. Resume mode skips earlier plan steps and continues
 from the selected node through the rest of the graph. Run-only mode executes
-only the selected node. Both modes write refreshed envelope and report files
-back into the same build directory.
+only the selected node. Both modes preserve the source build and allocate a
+fresh sibling run under `build/validation-reports/`. The fresh run continues
+the source build's valid W3C trace carrier, contains envelopes only for the
+selected execution scope, and records `execution.mode`, `selectedNodeId`, and
+`sourceBuild` in `summary.json`. Its `execution.complete` value is relative to
+that explicit scope: selected-to-tail for resume and one node for run-only.
+The source path itself must be a real, non-symlink direct child of the
+configured `build/validation-reports/` root. Cross-project, nested, and
+symlink-escaped source paths fail before closure acquisition.
 
 When a rerunnable node finishes with `failed` or `errored`, the canonical
 envelope may include a `rerunGuidance` object:
@@ -331,17 +344,24 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 
 ```json
 {
+  "envelopeVersion": 1,
   "nodeId": "login.smoke",
   "traceId": "0123456789abcdef0123456789abcdef",
   "status": "passed",
   "startedAt": "2026-04-21T22:06:57.043351Z",
   "endedAt":   "2026-04-21T22:06:57.216374Z",
+  "executorStartedAt": "2026-04-21T22:06:57.000000Z",
+  "executorEndedAt":   "2026-04-21T22:06:57.250000Z",
+  "spawnExitCode": 0,
+  "capturedStdoutLog": "node-logs/login.smoke.stdout.log",
+  "inputContextFile": "context/login.smoke.input.json",
   "assertions": [
     { "name": "login_endpoint_reachable", "status": "passed" }
   ],
   "artifacts": [
     { "type": "screenshot", "path": "build/validation-reports/20260421-220657/login.png" }
   ],
+  "processes": [],
   "metrics": { "statusCode": 200, "durationMs": 173 },
   "logs": [],
   "published": { "attemptedAs": "u-1a2b3c4d" }
@@ -350,6 +370,18 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 
 - `status`: `passed | failed | errored | skipped`.
 - `published` is this node's contribution to the downstream `Context[]`.
+- `envelopeVersion: 1` selects a closed schema. Every v1 envelope requires the
+  identity, trace, status, body/executor timestamps, spawn exit code, canonical
+  stdout/context pointers, assertions, artifacts, processes, metrics, logs, and
+  published fields shown above. Optional v1 fields are `failureMessage`,
+  `errorStack`, `rerunGuidance`, `malformedResultOutPreview`,
+  `environmentRepositoryExecution`, and `provisioningState`, each with a
+  strictly validated nested shape. Unknown top-level or nested fields are
+  rejected; adding an extension requires a deliberate envelope-version bump.
+- A `passed` envelope cannot contain a failed assertion. Timestamps must parse
+  as ordered ISO-8601 instants, body timing must fall inside executor timing,
+  and `capturedStdoutLog` / `inputContextFile` must equal the node's canonical
+  report-relative paths.
 - The canonical filename must be `<nodeId>.json`, with the basename exactly
   matching the embedded `nodeId`. Active-run envelopes must also carry the one
   persisted run trace ID; missing, invalid, or mismatched identities make the
@@ -362,7 +394,7 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 One CLI arg, two encodings:
 
 - **Inline** (≤ 8 KB): `--context={"items":[{"nodeId":"user.seeded","data":{"userId":"u-1a2b"}}, ...]}`
-- **File ref**: `--context=@<abs-path>` — every attempted node has its exact input context saved at `<reportDir>/context/<node-id>.input.json`; large runtime args may also spill to `<reportDir>/context/step-NNN.json`.
+- **File ref**: `--context=@<abs-path>` — every attempted node has its exact input context saved at `<reportDir>/context/<node-id>.input.json`; that canonical snapshot is also the large-argument file reference, so no second spill file is created.
 
 Executor-ingested context, child-result, and envelope JSON is strict UTF-8 and
 limited to 16 MiB per document. Context item node IDs use the same portable
@@ -437,21 +469,44 @@ Each run writes under `build/validation-reports/<runId>/`:
 
 ```
 build/validation-reports/<runId>/
+  execution-scope.json        # no-replace expected nodes + replay digest provenance
+  attempt-closure.json        # closure-v2 exact evidence digest binding
   trace-context.json          # W3C carrier for the whole run
   envelope/<nodeId>.json     # canonical per-node envelope
   context/<nodeId>.input.json # exact input Context[] for that node attempt
-  context/step-NNN.json      # optional large runtime --context spill file
   summary.json               # aggregated summary (written inline at end of run)
   report.md                  # markdown rollup (same)
 ```
 
 `summary.json` is the machine-readable handoff for CI, dashboards, agents.
+`execution-scope.json` is published before node execution and is the authority
+for the attempt's expected evidence set for inline and manually regenerated
+completeness. `attempt-closure.json` is published atomically only after node
+execution ends. It binds raw scope/carrier bytes and exact sorted present
+context/envelope path-to-SHA-256 maps; every report regeneration rechecks that
+the closure still matches the current evidence, and missing or stale closure
+state renders `ERRORED`. Replay rejects missing, malformed,
+symlinked, changed, added, or removed evidence. Completeness also requires each saved input
+context to equal the ordered published-data prefix for its node; replay checks
+the selected context against one captured source snapshot both byte-for-byte
+and after strict parsing. Target scope v3 carries the source closure/context
+digests so manual regeneration never reopens source paths. Replay sources must
+be full, non-replay attempts whose complete ordered plan still exactly matches
+the current plan; the selected context must be the exact current ordered
+prefix, not merely a set containing declared dependencies. The closure is
+trusted application evidence, not authentication against an owner capable of
+rewriting both evidence and closure. Manual regeneration also anchors envelope traces to
+`trace-context.json`; a pre-scope legacy run is
+reported as `legacy-unknown` and `ERRORED`, never inferred to be a complete full
+run from whichever envelopes happen to remain.
 The trace carrier is strict UTF-8 and limited to 4 KiB; resume requires the
 existing valid carrier rather than minting a replacement trace. Reporting uses
 a streaming directory scan, retains at most 10,000 envelope files, accepts at
-most 16 MiB per envelope and 64 MiB in aggregate, and fails closed when any
-bound or identity check is exceeded. Manual regeneration permits wholly legacy
-evidence with no `traceId` fields, but never blank, mixed, or inconsistent traces.
+most 16 MiB per document and 16 MiB each in aggregate envelope and context
+evidence, inventories at most 500,000 aggregate JSON structural tokens, and
+fails closed when any bound or identity check is exceeded. Manual regeneration permits wholly legacy
+evidence with no `traceId` fields, but never blank, all-zero, mixed, or
+inconsistent traces.
 
 ## Java SDK (`com.hayden.testgraphsdk.sdk`)
 

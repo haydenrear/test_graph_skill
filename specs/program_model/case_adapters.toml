@@ -1,7 +1,7 @@
 # Map generated program-model action labels to repository adapters when case
-# generation is enabled. These adapters document the accepted semantic
-# boundaries and stay non-executable until a future workflow wires refinement
-# execution against generated cases.
+# generation is enabled. Legacy adapters remain documented boundaries. Fresh
+# replay currently has a production batch evidence gate, not a per-transition
+# state projection, so its TLA actions are intentionally not mapped here.
 
 [adapters.ScaffoldProject]
 adapter = "specs.program_model.production_adapters:ScaffoldProjectAdapter"

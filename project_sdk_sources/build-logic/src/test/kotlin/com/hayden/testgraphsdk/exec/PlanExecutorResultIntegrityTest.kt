@@ -4,14 +4,17 @@ import com.hayden.testgraphsdk.MiniJson
 import com.hayden.testgraphsdk.NodeKind
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import com.hayden.testgraphsdk.ValidationRuntime
+import com.hayden.testgraphsdk.tasks.RunReportWriter
 import org.gradle.testfixtures.ProjectBuilder
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PlanExecutorResultIntegrityTest {
@@ -53,7 +56,136 @@ class PlanExecutorResultIntegrityTest {
         assertTrue(envelope.length() < 64 * 1024, "canonical envelope must stay bounded")
     }
 
+    @Test
+    fun passedChildResultWithFailedAssertionIsSynthesizedAsErroredEvidence() {
+        val (envelope, failure) = runSingleNode { invocation ->
+            invocation.resultOut.parentFile.mkdirs()
+            invocation.resultOut.writeText(
+                """{
+                  "nodeId":"planned.node",
+                  "status":"passed",
+                  "startedAt":"2026-01-01T00:00:00Z",
+                  "endedAt":"2026-01-01T00:00:00Z",
+                  "assertions":[{"name":"irrefutable","status":"failed"}],
+                  "artifacts":[],
+                  "processes":[],
+                  "metrics":{},
+                  "logs":[],
+                  "published":{}
+                }""".trimIndent()
+            )
+        }
+
+        val parsed = MiniJson.obj(MiniJson.parse(envelope.readText()))
+        assertEquals(1L, parsed["envelopeVersion"])
+        assertEquals("errored", parsed["status"])
+        assertContains(parsed["failureMessage"] as String, "assertion is failed")
+        assertContains(failure.message.orEmpty(), "node planned.node errored")
+    }
+
+    @Test
+    fun reapedOrphanProcessContractCannotPublishPassingEvidenceButCanBeClosed() {
+        val (envelope, failure) = runSingleNode(
+            ExecutionOutcome.ProcessContractViolation(
+                exitCode = PosixProcessGroupController.ORPHANED_GROUP_REAPED_EXIT_CODE,
+                reason = "fixture launcher left a surviving descendant",
+            )
+        ) { invocation ->
+            invocation.resultOut.parentFile.mkdirs()
+            invocation.resultOut.writeText(
+                """{
+                  "nodeId":"planned.node",
+                  "status":"passed",
+                  "startedAt":"2026-01-01T00:00:00Z",
+                  "endedAt":"2026-01-01T00:00:00Z",
+                  "assertions":[],
+                  "artifacts":[],
+                  "processes":[],
+                  "metrics":{},
+                  "logs":[],
+                  "published":{"poison":"must-not-flow"}
+                }""".trimIndent()
+            )
+        }
+
+        val parsed = MiniJson.obj(MiniJson.parse(envelope.readText()))
+        assertEquals("errored", parsed["status"])
+        assertEquals(125L, parsed["spawnExitCode"])
+        assertEquals(emptyMap<String, String>(), MiniJson.stringMap(parsed["published"]))
+        assertContains(parsed["failureMessage"] as String, "surviving descendant")
+        assertContains(failure.message.orEmpty(), "node planned.node errored")
+
+        val reportRoot = envelope.parentFile.parentFile
+        val traceId = parsed["traceId"] as String
+        RunReportWriter.persistExecutionScope(
+            reportRoot,
+            "resultIntegrity",
+            listOf("planned.node"),
+        )
+        RunReportWriter.persistAttemptClosure(
+            reportRoot,
+            "resultIntegrity",
+            listOf("planned.node"),
+            traceId,
+        )
+        val report = RunReportWriter.writeRunReport(reportRoot)
+        assertEquals("errored", report.status)
+        assertTrue(report.complete, "typed terminal failure should remain closable evidence")
+        assertFalse(
+            reportRoot.resolve("summary.json").readText()
+                .contains("attemptClosureIntegrityError")
+        )
+    }
+
+    @Test
+    fun independentlyOptionalJavaAndPythonProcessTimestampsRemainCanonical() {
+        for ((shape, processTiming) in listOf(
+            "java-start-only" to { now: String -> ",\"startedAt\":\"$now\"" },
+            "python-end-only" to { now: String -> ",\"endedAt\":\"$now\"" },
+        )) {
+            val (envelope, failure) = runSingleNode { invocation ->
+                val now = Instant.now().toString()
+                invocation.resultOut.parentFile.mkdirs()
+                invocation.resultOut.writeText(
+                    """{
+                      "nodeId":"planned.node",
+                      "status":"failed",
+                      "failureMessage":"intentional $shape result",
+                      "startedAt":"$now",
+                      "endedAt":"$now",
+                      "assertions":[],
+                      "artifacts":[],
+                      "processes":[{
+                        "label":"fixture",
+                        "command":["fixture"],
+                        "exitCode":-1,
+                        "pid":null,
+                        "log":null,
+                        "error":"partial observation"${processTiming(now)}
+                      }],
+                      "metrics":{},
+                      "logs":[],
+                      "published":{}
+                    }""".trimIndent()
+                )
+            }
+
+            val parsed = MiniJson.obj(MiniJson.parse(envelope.readText()))
+            assertEquals("failed", parsed["status"], shape)
+            assertEquals("intentional $shape result", parsed["failureMessage"], shape)
+            assertContains(
+                failure.message.orEmpty(),
+                "node planned.node failed",
+                message = shape,
+            )
+            val process = MiniJson.obj(MiniJson.list(parsed["processes"]).single())
+            assertEquals(shape == "java-start-only", process.containsKey("startedAt"), shape)
+            assertEquals(shape == "python-end-only", process.containsKey("endedAt"), shape)
+        }
+    }
+
     private fun runSingleNode(
+        executionOutcome: ExecutionOutcome = ExecutionOutcome.Completed(0),
         writeResult: (NodeInvocation) -> Unit,
     ): Pair<File, Throwable> {
         disableExportForUnitTest()
@@ -72,7 +204,7 @@ class PlanExecutorResultIntegrityTest {
 
             override fun execute(invocation: NodeInvocation): ExecutionOutcome {
                 writeResult(invocation)
-                return ExecutionOutcome.Completed(0)
+                return executionOutcome
             }
         }
 

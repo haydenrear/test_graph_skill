@@ -1,15 +1,13 @@
 ----------------------------- MODULE TestGraph -----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* Desired whole-program model for TG-6. The accepted TG-5 baseline already
-\* models graph definition, dependency resolution, node execution, published
-\* context, reports, build-directory rerun semantics, side-effect metadata,
-\* provisioning state, branch-scoped environment repositories, environment
-\* context propagation, branch environment reset, and merge-gated destroy.
-\* TG-6 adds first-class environment repository scaffolding, local/AWS/GitHub
-\* Actions target templates, shared deploy/reset/delete node templates,
-\* polyglot context propagation validation, explicit AWS execution guardrails,
-\* and skip semantics for reset/destroy lifecycle choices.
+\* Accepted whole-program model for Test Graph. It carries graph definition,
+\* dependency resolution, node execution, published context, reports,
+\* environment-repository lifecycle behavior, and the fresh replay-attempt
+\* refinement. A replay allocates a new attempt (never a new graph), selects a
+\* tail or singleton execution scope, imports the selected node's saved source
+\* context, continues the source carrier/trace, and writes only attempt-local
+\* evidence while leaving source evidence immutable.
 
 CONSTANTS
   Graphs,
@@ -26,6 +24,18 @@ CONSTANTS
   LifecycleCommands,
   AwsTargets,
   AwsBackends,
+  RunAttempts,
+  PlanLength,
+  PlanFirstNode,
+  PlanSecondNode,
+  PlanThirdNode,
+  TraceIds,
+  TraceCarriers,
+  NoAttempt,
+  NoGraph,
+  NoNode,
+  NoTrace,
+  NoCarrier,
   NoReason
 
 VARIABLES
@@ -72,6 +82,36 @@ VARIABLES
   aws_execution_guarded,
   skipped_reset_environments,
   skipped_destroy_environments,
+  allocated_attempts,
+  active_attempts,
+  attempt_graph,
+  attempt_mode,
+  attempt_source,
+  attempt_selected_node,
+  attempt_plan,
+  attempt_passed_nodes,
+  attempt_terminal_nodes,
+  attempt_envelopes,
+  attempt_context_items,
+  attempt_saved_contexts,
+  attempt_input_context,
+  attempt_initial_context,
+  attempt_trace,
+  attempt_carrier,
+  attempt_envelope_trace,
+  attempt_report_nodes,
+  attempt_report_status,
+  attempt_report_complete,
+  attempt_report_writers,
+  attempt_report_last_writer,
+  attempt_closed,
+  attempt_evidence_tampered,
+  attempt_closure_fingerprint,
+  acquired_replay_sources,
+  acquired_replay_context,
+  acquired_replay_trace,
+  acquired_replay_carrier,
+  acquired_replay_closure_fingerprint,
   result
 
 vars ==
@@ -90,9 +130,20 @@ vars ==
      environment_repository_scaffolded, scaffolded_environment_templates,
      scaffolded_lifecycle_node_templates, runtime_environment_context_verified,
      aws_execution_guarded, skipped_reset_environments,
-     skipped_destroy_environments, result >>
+     skipped_destroy_environments, allocated_attempts, active_attempts,
+     attempt_graph, attempt_mode, attempt_source, attempt_selected_node,
+     attempt_plan, attempt_passed_nodes, attempt_terminal_nodes,
+     attempt_envelopes, attempt_context_items, attempt_saved_contexts,
+     attempt_input_context, attempt_initial_context, attempt_trace,
+     attempt_carrier, attempt_envelope_trace, attempt_report_nodes,
+     attempt_report_status, attempt_report_complete, attempt_report_writers,
+     attempt_report_last_writer, attempt_closed, attempt_evidence_tampered,
+     attempt_closure_fingerprint, acquired_replay_sources,
+     acquired_replay_context, acquired_replay_trace,
+     acquired_replay_carrier, acquired_replay_closure_fingerprint,
+     result >>
 
-base_program_vars ==
+legacy_program_vars ==
   << scaffolded, declared_graphs, explicit_nodes, script_deps, described_nodes,
      dsl_deps, overlays, resolved_nodes, planned_graphs, plan_docs,
      active_graphs, passed_nodes, terminal_nodes, envelopes, context_items,
@@ -106,12 +157,34 @@ base_program_vars ==
      merge_destroy_requested, destroy_authorized_environments,
      destroyed_branch_environments, environment_context_keys >>
 
+attempt_vars ==
+  << allocated_attempts, active_attempts, attempt_graph, attempt_mode,
+     attempt_source, attempt_selected_node, attempt_plan,
+     attempt_passed_nodes, attempt_terminal_nodes, attempt_envelopes,
+     attempt_context_items, attempt_saved_contexts, attempt_input_context,
+     attempt_initial_context, attempt_trace, attempt_carrier,
+     attempt_envelope_trace, attempt_report_nodes, attempt_report_status,
+     attempt_report_complete, attempt_report_writers,
+     attempt_report_last_writer, attempt_closed, attempt_evidence_tampered,
+     attempt_closure_fingerprint, acquired_replay_sources,
+     acquired_replay_context, acquired_replay_trace,
+     acquired_replay_carrier, acquired_replay_closure_fingerprint >>
+
+replay_integrity_vars ==
+  << attempt_closed, attempt_evidence_tampered,
+     attempt_closure_fingerprint, acquired_replay_sources,
+     acquired_replay_context, acquired_replay_trace,
+     acquired_replay_carrier, acquired_replay_closure_fingerprint >>
+
+base_program_vars ==
+  << legacy_program_vars, attempt_vars >>
+
 resumption_vars ==
   << input_contexts, rerunnable_nodes, rerun_guidance, resumed_nodes,
      single_node_reruns >>
 
 side_effect_vars ==
-  << side_effect_runtime_configured >>
+  << side_effect_runtime_configured, attempt_vars >>
 
 provisioning_vars ==
   << provisioning_state_configured, feature_branches,
@@ -124,13 +197,17 @@ provisioning_vars ==
      environment_context_keys, environment_repository_scaffolded,
      scaffolded_environment_templates, scaffolded_lifecycle_node_templates,
      runtime_environment_context_verified, aws_execution_guarded,
-     skipped_reset_environments, skipped_destroy_environments >>
+     skipped_reset_environments, skipped_destroy_environments,
+     attempt_vars >>
 
-environment_scaffold_vars ==
+legacy_environment_scaffold_vars ==
   << environment_repository_scaffolded, scaffolded_environment_templates,
      scaffolded_lifecycle_node_templates, runtime_environment_context_verified,
      aws_execution_guarded, skipped_reset_environments,
      skipped_destroy_environments >>
+
+environment_scaffold_vars ==
+  << legacy_environment_scaffold_vars, attempt_vars >>
 
 BranchEnvironment(g, b, target, backend) ==
   [graph |-> g, branch |-> b, target |-> target, backend |-> backend]
@@ -188,6 +265,128 @@ GraphDependencyClosed(g, ns) ==
   /\ \A n \in ns:
       MergedDeps(g, n) \subseteq ns
 
+GraphPlan ==
+  CASE PlanLength = 1 -> <<PlanFirstNode>>
+    [] PlanLength = 2 -> <<PlanFirstNode, PlanSecondNode>>
+    [] OTHER -> <<PlanFirstNode, PlanSecondNode, PlanThirdNode>>
+
+SequenceNodes(sequence) ==
+  {sequence[i] : i \in DOMAIN sequence}
+
+UniqueNodeSequence(sequence) ==
+  Cardinality(SequenceNodes(sequence)) = Len(sequence)
+
+NodeIndex(sequence, node) ==
+  CHOOSE i \in DOMAIN sequence: sequence[i] = node
+
+SequenceTailFrom(sequence, node) ==
+  SubSeq(sequence, NodeIndex(sequence, node), Len(sequence))
+
+SequencePredecessors(sequence, node) ==
+  LET index == NodeIndex(sequence, node)
+  IN IF index = 1 THEN {} ELSE {sequence[i] : i \in 1..(index - 1)}
+
+ContextItemFingerprint(node) ==
+  [nodeId |-> node,
+   publishedSha256 |-> [kind |-> "published", nodeId |-> node]]
+
+AllContextItemFingerprints ==
+  {ContextItemFingerprint(node) : node \in SourceNodes}
+
+ContextNodeIds(context) ==
+  {context[i].nodeId : i \in DOMAIN context}
+
+AttemptEnvelopeStatus(attempt, node) ==
+  IF node \in attempt_passed_nodes[attempt] THEN "passed" ELSE "terminal"
+
+CanonicalEnvelopeFingerprint(attempt, node) ==
+  [envelopeVersion |-> 1,
+   nodeId |-> node,
+   status |-> AttemptEnvelopeStatus(attempt, node),
+   trace |-> attempt_envelope_trace[attempt][node],
+   assertionsConsistentWithStatus |-> TRUE,
+   publishedSha256 |-> [kind |-> "published", nodeId |-> node]]
+
+ReplayKey(source, selected) ==
+  [source |-> source, selected |-> selected]
+
+ReplayKeys ==
+  {ReplayKey(source, selected) :
+    source \in RunAttempts, selected \in SourceNodes}
+
+NoEvidenceFingerprint == [version |-> 0]
+
+CanonicalAttemptEvidenceFingerprint(attempt) ==
+  [version |-> 2,
+   scopeSha256 |->
+     [graph |-> attempt_graph[attempt],
+      mode |-> attempt_mode[attempt],
+      source |-> attempt_source[attempt],
+      selected |-> attempt_selected_node[attempt],
+      exactPlan |-> attempt_plan[attempt]],
+   carrierSha256 |->
+     [trace |-> attempt_trace[attempt], carrier |-> attempt_carrier[attempt]],
+   contextSha256 |->
+     [node \in attempt_saved_contexts[attempt] |->
+       [path |-> [directory |-> "context", nodeId |-> node],
+        exactOrderedItems |-> attempt_input_context[attempt][node]]],
+   envelopeSha256 |->
+     [node \in attempt_envelopes[attempt] |->
+       [path |-> [directory |-> "envelope", nodeId |-> node],
+        exactCanonicalEnvelope |-> CanonicalEnvelopeFingerprint(attempt, node)]]]
+
+CurrentAttemptEvidenceFingerprint(attempt) ==
+  IF attempt \in attempt_evidence_tampered
+  THEN [version |-> 2,
+        tampered |-> TRUE,
+        prior |-> CanonicalAttemptEvidenceFingerprint(attempt)]
+  ELSE CanonicalAttemptEvidenceFingerprint(attempt)
+
+ClosureMatchesCurrentEvidence(attempt) ==
+  /\ attempt \in attempt_closed
+  /\ attempt_closure_fingerprint[attempt] =
+       CurrentAttemptEvidenceFingerprint(attempt)
+
+ExpectedAttemptContext(attempt) ==
+  LET passedCount == Cardinality(attempt_passed_nodes[attempt])
+  IN attempt_initial_context[attempt] \o
+       [i \in 1..passedCount |->
+          ContextItemFingerprint(attempt_plan[attempt][i])]
+
+ExpectedNodeInputContext(attempt, node) ==
+  LET index == NodeIndex(attempt_plan[attempt], node)
+  IN attempt_initial_context[attempt] \o
+       [i \in 1..(index - 1) |->
+          ContextItemFingerprint(attempt_plan[attempt][i])]
+
+AttemptNodes(attempt) ==
+  SequenceNodes(attempt_plan[attempt])
+
+ReplayAttempts ==
+  {attempt \in allocated_attempts: attempt_mode[attempt] /= "full"}
+
+ReplaySourceAttempts ==
+  {attempt_source[attempt] : attempt \in ReplayAttempts}
+
+ReportIsComplete(attempt) ==
+  /\ ClosureMatchesCurrentEvidence(attempt)
+  /\ attempt_envelopes[attempt] = AttemptNodes(attempt)
+  /\ attempt_saved_contexts[attempt] = AttemptNodes(attempt)
+
+ComputedReportStatus(attempt) ==
+  IF ~ReportIsComplete(attempt)
+  THEN "errored"
+  ELSE IF attempt_terminal_nodes[attempt] /= {}
+       THEN "failed"
+       ELSE IF attempt_passed_nodes[attempt] = AttemptNodes(attempt)
+            THEN "passed"
+            ELSE "errored"
+
+InlineReportStatus(attempt) ==
+  IF attempt_terminal_nodes[attempt] /= {}
+  THEN "errored"
+  ELSE ComputedReportStatus(attempt)
+
 Init ==
   /\ scaffolded = FALSE
   /\ declared_graphs = {}
@@ -232,6 +431,40 @@ Init ==
   /\ aws_execution_guarded = {}
   /\ skipped_reset_environments = {}
   /\ skipped_destroy_environments = {}
+  /\ allocated_attempts = {}
+  /\ active_attempts = {}
+  /\ attempt_graph = [attempt \in RunAttempts |-> NoGraph]
+  /\ attempt_mode = [attempt \in RunAttempts |-> "none"]
+  /\ attempt_source = [attempt \in RunAttempts |-> NoAttempt]
+  /\ attempt_selected_node = [attempt \in RunAttempts |-> NoNode]
+  /\ attempt_plan = [attempt \in RunAttempts |-> <<>>]
+  /\ attempt_passed_nodes = [attempt \in RunAttempts |-> {}]
+  /\ attempt_terminal_nodes = [attempt \in RunAttempts |-> {}]
+  /\ attempt_envelopes = [attempt \in RunAttempts |-> {}]
+  /\ attempt_context_items = [attempt \in RunAttempts |-> <<>>]
+  /\ attempt_saved_contexts = [attempt \in RunAttempts |-> {}]
+  /\ attempt_input_context =
+      [attempt \in RunAttempts |-> [node \in SourceNodes |-> <<>>]]
+  /\ attempt_initial_context = [attempt \in RunAttempts |-> <<>>]
+  /\ attempt_trace = [attempt \in RunAttempts |-> NoTrace]
+  /\ attempt_carrier = [attempt \in RunAttempts |-> NoCarrier]
+  /\ attempt_envelope_trace =
+      [attempt \in RunAttempts |-> [node \in SourceNodes |-> NoTrace]]
+  /\ attempt_report_nodes = [attempt \in RunAttempts |-> {}]
+  /\ attempt_report_status = [attempt \in RunAttempts |-> "none"]
+  /\ attempt_report_complete = [attempt \in RunAttempts |-> FALSE]
+  /\ attempt_report_writers = [attempt \in RunAttempts |-> {}]
+  /\ attempt_report_last_writer = [attempt \in RunAttempts |-> "none"]
+  /\ attempt_closed = {}
+  /\ attempt_evidence_tampered = {}
+  /\ attempt_closure_fingerprint =
+      [attempt \in RunAttempts |-> NoEvidenceFingerprint]
+  /\ acquired_replay_sources = {}
+  /\ acquired_replay_context = [key \in ReplayKeys |-> <<>>]
+  /\ acquired_replay_trace = [key \in ReplayKeys |-> NoTrace]
+  /\ acquired_replay_carrier = [key \in ReplayKeys |-> NoCarrier]
+  /\ acquired_replay_closure_fingerprint =
+      [key \in ReplayKeys |-> NoEvidenceFingerprint]
   /\ result = [accepted |-> TRUE, reason |-> NoReason]
 
 \* @command ScaffoldProject
@@ -902,6 +1135,7 @@ DestroyMergedBranchEnvironment(g, b, target, backend) ==
                     feature_branches, environment_repo_configured,
                     branch_environment_specs,
                     destroy_authorized_environments >>
+    /\ UNCHANGED attempt_vars
     /\ UNCHANGED << environment_repository_scaffolded,
                     scaffolded_environment_templates,
                     scaffolded_lifecycle_node_templates,
@@ -1031,6 +1265,392 @@ SkipBranchEnvironmentDestroy(g, b, target, backend) ==
                     runtime_environment_context_verified,
                     aws_execution_guarded, skipped_reset_environments >>
 
+\* @command PrepareReplayGraph
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.prepare_replay_graph
+PrepareReplayGraph(g) ==
+  /\ ~scaffolded
+  /\ g \in Graphs
+  /\ GraphPlan /= <<>>
+  /\ SequenceNodes(GraphPlan) \subseteq SourceNodes
+  /\ UniqueNodeSequence(GraphPlan)
+  /\ scaffolded' = TRUE
+  /\ declared_graphs' = declared_graphs \cup {g}
+  /\ explicit_nodes' = [explicit_nodes EXCEPT ![g] = SequenceNodes(GraphPlan)]
+  /\ described_nodes' = described_nodes \cup SequenceNodes(GraphPlan)
+  /\ resolved_nodes' = [resolved_nodes EXCEPT ![g] = SequenceNodes(GraphPlan)]
+  /\ planned_graphs' = planned_graphs \cup {g}
+  /\ plan_docs' = plan_docs \cup {g}
+  /\ package_catalog' = Packages
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << script_deps, dsl_deps, overlays, active_graphs,
+                  passed_nodes, terminal_nodes, envelopes, context_items,
+                  run_reports >>
+  /\ UNCHANGED resumption_vars
+  /\ UNCHANGED side_effect_vars
+  /\ UNCHANGED provisioning_vars
+
+\* @command StartFullAttempt
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.start_full_attempt
+StartFullAttempt(g, attempt, trace, carrier) ==
+  /\ scaffolded
+  /\ g \in planned_graphs
+  /\ resolved_nodes[g] = SequenceNodes(GraphPlan)
+  /\ attempt \in RunAttempts \ allocated_attempts
+  /\ trace \in TraceIds
+  /\ carrier \in TraceCarriers
+  /\ trace \notin {attempt_trace[a] : a \in allocated_attempts}
+  /\ carrier \notin {attempt_carrier[a] : a \in allocated_attempts}
+  /\ allocated_attempts' = allocated_attempts \cup {attempt}
+  /\ active_attempts' = active_attempts \cup {attempt}
+  /\ attempt_graph' = [attempt_graph EXCEPT ![attempt] = g]
+  /\ attempt_mode' = [attempt_mode EXCEPT ![attempt] = "full"]
+  /\ attempt_source' = [attempt_source EXCEPT ![attempt] = NoAttempt]
+  /\ attempt_selected_node' = [attempt_selected_node EXCEPT ![attempt] = NoNode]
+  /\ attempt_plan' = [attempt_plan EXCEPT ![attempt] = GraphPlan]
+  /\ attempt_passed_nodes' = [attempt_passed_nodes EXCEPT ![attempt] = {}]
+  /\ attempt_terminal_nodes' = [attempt_terminal_nodes EXCEPT ![attempt] = {}]
+  /\ attempt_envelopes' = [attempt_envelopes EXCEPT ![attempt] = {}]
+  /\ attempt_context_items' = [attempt_context_items EXCEPT ![attempt] = <<>>]
+  /\ attempt_saved_contexts' = [attempt_saved_contexts EXCEPT ![attempt] = {}]
+  /\ attempt_input_context' =
+      [attempt_input_context EXCEPT
+        ![attempt] = [node \in SourceNodes |-> <<>>]]
+  /\ attempt_initial_context' = [attempt_initial_context EXCEPT ![attempt] = <<>>]
+  /\ attempt_trace' = [attempt_trace EXCEPT ![attempt] = trace]
+  /\ attempt_carrier' = [attempt_carrier EXCEPT ![attempt] = carrier]
+  /\ attempt_envelope_trace' =
+      [attempt_envelope_trace EXCEPT
+        ![attempt] = [node \in SourceNodes |-> NoTrace]]
+  /\ attempt_report_nodes' = [attempt_report_nodes EXCEPT ![attempt] = {}]
+  /\ attempt_report_status' = [attempt_report_status EXCEPT ![attempt] = "none"]
+  /\ attempt_report_complete' = [attempt_report_complete EXCEPT ![attempt] = FALSE]
+  /\ attempt_report_writers' = [attempt_report_writers EXCEPT ![attempt] = {}]
+  /\ attempt_report_last_writer' =
+      [attempt_report_last_writer EXCEPT ![attempt] = "none"]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command StartReplayAttempt
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.start_replay_attempt
+StartReplayAttempt(source, attempt, mode, selected) ==
+  LET key == ReplayKey(source, selected)
+      sourceContext == acquired_replay_context[key]
+      replayPlan == IF mode = "resume"
+                    THEN SequenceTailFrom(GraphPlan, selected)
+                    ELSE <<selected>>
+  IN
+    /\ key \in acquired_replay_sources
+    /\ source \in attempt_closed
+    /\ attempt_mode[source] = "full"
+    /\ attempt_plan[source] = GraphPlan
+    /\ attempt \in RunAttempts \ allocated_attempts
+    /\ mode \in {"resume", "run-only"}
+    /\ selected \in SequenceNodes(GraphPlan)
+    /\ selected \in attempt_saved_contexts[source]
+    /\ sourceContext = ExpectedNodeInputContext(source, selected)
+    /\ allocated_attempts' = allocated_attempts \cup {attempt}
+    /\ active_attempts' = active_attempts \cup {attempt}
+    /\ attempt_graph' =
+        [attempt_graph EXCEPT ![attempt] = attempt_graph[source]]
+    /\ attempt_mode' = [attempt_mode EXCEPT ![attempt] = mode]
+    /\ attempt_source' = [attempt_source EXCEPT ![attempt] = source]
+    /\ attempt_selected_node' =
+        [attempt_selected_node EXCEPT ![attempt] = selected]
+    /\ attempt_plan' = [attempt_plan EXCEPT ![attempt] = replayPlan]
+    /\ attempt_passed_nodes' = [attempt_passed_nodes EXCEPT ![attempt] = {}]
+    /\ attempt_terminal_nodes' = [attempt_terminal_nodes EXCEPT ![attempt] = {}]
+    /\ attempt_envelopes' = [attempt_envelopes EXCEPT ![attempt] = {}]
+    /\ attempt_context_items' =
+        [attempt_context_items EXCEPT ![attempt] = sourceContext]
+    /\ attempt_saved_contexts' = [attempt_saved_contexts EXCEPT ![attempt] = {}]
+    /\ attempt_input_context' =
+        [attempt_input_context EXCEPT
+          ![attempt] = [node \in SourceNodes |-> <<>>]]
+    /\ attempt_initial_context' =
+        [attempt_initial_context EXCEPT ![attempt] = sourceContext]
+    /\ attempt_trace' =
+        [attempt_trace EXCEPT ![attempt] = acquired_replay_trace[key]]
+    /\ attempt_carrier' =
+        [attempt_carrier EXCEPT ![attempt] = acquired_replay_carrier[key]]
+    /\ attempt_envelope_trace' =
+        [attempt_envelope_trace EXCEPT
+          ![attempt] = [node \in SourceNodes |-> NoTrace]]
+    /\ attempt_report_nodes' = [attempt_report_nodes EXCEPT ![attempt] = {}]
+    /\ attempt_report_status' =
+        [attempt_report_status EXCEPT ![attempt] = "none"]
+    /\ attempt_report_complete' =
+        [attempt_report_complete EXCEPT ![attempt] = FALSE]
+    /\ attempt_report_writers' =
+        [attempt_report_writers EXCEPT ![attempt] = {}]
+    /\ attempt_report_last_writer' =
+        [attempt_report_last_writer EXCEPT ![attempt] = "none"]
+    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+    /\ UNCHANGED replay_integrity_vars
+    /\ UNCHANGED legacy_program_vars
+    /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command RunAttemptNodePass
+\* @result NodeRunResult
+\* @port TestGraphProgramPort.run_attempt_node_pass
+RunAttemptNodePass(attempt, node) ==
+  /\ attempt \in active_attempts
+  /\ node \in AttemptNodes(attempt) \ attempt_envelopes[attempt]
+  /\ SequencePredecessors(attempt_plan[attempt], node) \subseteq
+      attempt_passed_nodes[attempt]
+  /\ attempt_passed_nodes' =
+      [attempt_passed_nodes EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_envelopes' =
+      [attempt_envelopes EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_context_items' =
+      [attempt_context_items EXCEPT
+        ![attempt] = Append(@, ContextItemFingerprint(node))]
+  /\ attempt_saved_contexts' =
+      [attempt_saved_contexts EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_input_context' =
+      [attempt_input_context EXCEPT
+        ![attempt][node] = attempt_context_items[attempt]]
+  /\ attempt_envelope_trace' =
+      [attempt_envelope_trace EXCEPT
+        ![attempt][node] = attempt_trace[attempt]]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED << allocated_attempts, active_attempts, attempt_graph,
+                  attempt_mode, attempt_source, attempt_selected_node,
+                  attempt_plan, attempt_terminal_nodes,
+                  attempt_initial_context, attempt_trace, attempt_carrier,
+                  attempt_report_nodes, attempt_report_status,
+                  attempt_report_complete, attempt_report_writers,
+                  attempt_report_last_writer >>
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command RunAttemptNodeTerminal
+\* @result NodeRunResult
+\* @port TestGraphProgramPort.run_attempt_node_terminal
+RunAttemptNodeTerminal(attempt, node) ==
+  /\ attempt \in active_attempts
+  /\ node \in AttemptNodes(attempt) \ attempt_envelopes[attempt]
+  /\ SequencePredecessors(attempt_plan[attempt], node) \subseteq
+      attempt_passed_nodes[attempt]
+  /\ active_attempts' = active_attempts \ {attempt}
+  /\ attempt_terminal_nodes' =
+      [attempt_terminal_nodes EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_envelopes' =
+      [attempt_envelopes EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_saved_contexts' =
+      [attempt_saved_contexts EXCEPT ![attempt] = @ \cup {node}]
+  /\ attempt_input_context' =
+      [attempt_input_context EXCEPT
+        ![attempt][node] = attempt_context_items[attempt]]
+  /\ attempt_envelope_trace' =
+      [attempt_envelope_trace EXCEPT
+        ![attempt][node] = attempt_trace[attempt]]
+  /\ result' = [accepted |-> FALSE, reason |-> "NODE_NOT_PASSED"]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED << allocated_attempts, attempt_graph, attempt_mode,
+                  attempt_source, attempt_selected_node, attempt_plan,
+                  attempt_passed_nodes, attempt_context_items,
+                  attempt_initial_context, attempt_trace, attempt_carrier,
+                  attempt_report_nodes, attempt_report_status,
+                  attempt_report_complete, attempt_report_writers,
+                  attempt_report_last_writer >>
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command FinishAttemptSuccess
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.finish_attempt_success
+FinishAttemptSuccess(attempt) ==
+  /\ attempt \in active_attempts
+  /\ attempt_passed_nodes[attempt] = AttemptNodes(attempt)
+  /\ active_attempts' = active_attempts \ {attempt}
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED << allocated_attempts, attempt_graph, attempt_mode,
+                  attempt_source, attempt_selected_node, attempt_plan,
+                  attempt_passed_nodes, attempt_terminal_nodes,
+                  attempt_envelopes, attempt_context_items,
+                  attempt_saved_contexts, attempt_input_context,
+                  attempt_initial_context, attempt_trace, attempt_carrier,
+                  attempt_envelope_trace, attempt_report_nodes,
+                  attempt_report_status, attempt_report_complete,
+                  attempt_report_writers, attempt_report_last_writer >>
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command PublishAttemptClosure
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.publish_attempt_closure
+PublishAttemptClosure(attempt) ==
+  /\ attempt \in allocated_attempts \ active_attempts
+  /\ attempt \notin attempt_closed
+  /\ attempt_closed' = attempt_closed \cup {attempt}
+  /\ attempt_closure_fingerprint' =
+      [attempt_closure_fingerprint EXCEPT
+        ![attempt] = CurrentAttemptEvidenceFingerprint(attempt)]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << legacy_program_vars, allocated_attempts, active_attempts,
+                  attempt_graph, attempt_mode, attempt_source,
+                  attempt_selected_node, attempt_plan,
+                  attempt_passed_nodes, attempt_terminal_nodes,
+                  attempt_envelopes, attempt_context_items,
+                  attempt_saved_contexts, attempt_input_context,
+                  attempt_initial_context, attempt_trace, attempt_carrier,
+                  attempt_envelope_trace, attempt_report_nodes,
+                  attempt_report_status, attempt_report_complete,
+                  attempt_report_writers, attempt_report_last_writer,
+                  attempt_evidence_tampered, acquired_replay_sources,
+                  acquired_replay_context, acquired_replay_trace,
+                  acquired_replay_carrier,
+                  acquired_replay_closure_fingerprint >>
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command AcquireReplaySource
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.acquire_replay_source
+AcquireReplaySource(source, selected) ==
+  LET key == ReplayKey(source, selected)
+  IN
+    /\ source \in attempt_closed
+    /\ attempt_mode[source] = "full"
+    /\ attempt_plan[source] = GraphPlan
+    /\ selected \in attempt_saved_contexts[source]
+    /\ attempt_input_context[source][selected] =
+         ExpectedNodeInputContext(source, selected)
+    /\ key \notin acquired_replay_sources
+    /\ ClosureMatchesCurrentEvidence(source)
+    /\ acquired_replay_sources' = acquired_replay_sources \cup {key}
+    /\ acquired_replay_context' =
+        [acquired_replay_context EXCEPT
+          ![key] = attempt_input_context[source][selected]]
+    /\ acquired_replay_trace' =
+        [acquired_replay_trace EXCEPT ![key] = attempt_trace[source]]
+    /\ acquired_replay_carrier' =
+        [acquired_replay_carrier EXCEPT ![key] = attempt_carrier[source]]
+    /\ acquired_replay_closure_fingerprint' =
+        [acquired_replay_closure_fingerprint EXCEPT
+          ![key] = attempt_closure_fingerprint[source]]
+    /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+    /\ UNCHANGED << legacy_program_vars, allocated_attempts, active_attempts,
+                    attempt_graph, attempt_mode, attempt_source,
+                    attempt_selected_node, attempt_plan,
+                    attempt_passed_nodes, attempt_terminal_nodes,
+                    attempt_envelopes, attempt_context_items,
+                    attempt_saved_contexts, attempt_input_context,
+                    attempt_initial_context, attempt_trace, attempt_carrier,
+                    attempt_envelope_trace, attempt_report_nodes,
+                    attempt_report_status, attempt_report_complete,
+                    attempt_report_writers, attempt_report_last_writer,
+                    attempt_closed, attempt_evidence_tampered,
+                    attempt_closure_fingerprint >>
+    /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command TamperClosedAttemptEvidence
+\* @result WorkflowResult
+TamperClosedAttemptEvidence(source) ==
+  /\ source \in attempt_closed \ attempt_evidence_tampered
+  /\ attempt_evidence_tampered' = attempt_evidence_tampered \cup {source}
+  \* A report consumer revalidates the current closure before trusting a
+  \* derived status. Model that trust view directly: an existing report is
+  \* immediately non-green once its evidence no longer matches its closure.
+  /\ attempt_report_status' =
+      [attempt_report_status EXCEPT
+        ![source] = IF attempt_report_writers[source] = {}
+                    THEN "none"
+                    ELSE "errored"]
+  /\ attempt_report_complete' =
+      [attempt_report_complete EXCEPT ![source] = FALSE]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED << legacy_program_vars, allocated_attempts, active_attempts,
+                  attempt_graph, attempt_mode, attempt_source,
+                  attempt_selected_node, attempt_plan,
+                  attempt_passed_nodes, attempt_terminal_nodes,
+                  attempt_envelopes, attempt_context_items,
+                  attempt_saved_contexts, attempt_input_context,
+                  attempt_initial_context, attempt_trace, attempt_carrier,
+                  attempt_envelope_trace, attempt_report_nodes,
+                  attempt_report_writers, attempt_report_last_writer,
+                  attempt_closed, attempt_closure_fingerprint,
+                  acquired_replay_sources, acquired_replay_context,
+                  acquired_replay_trace, acquired_replay_carrier,
+                  acquired_replay_closure_fingerprint >>
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command RejectTamperedReplaySource
+\* @result WorkflowResult
+RejectTamperedReplaySource(source, selected) ==
+  LET key == ReplayKey(source, selected)
+  IN
+    /\ source \in attempt_closed
+    /\ selected \in attempt_saved_contexts[source]
+    /\ key \notin acquired_replay_sources
+    /\ ~ClosureMatchesCurrentEvidence(source)
+    /\ result' = [accepted |-> FALSE, reason |-> "SOURCE_EVIDENCE_TAMPERED"]
+    /\ UNCHANGED base_program_vars
+    /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command WriteInlineAttemptReport
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.write_inline_attempt_report
+WriteInlineAttemptReport(attempt) ==
+  /\ attempt \in allocated_attempts \ active_attempts
+  /\ attempt_envelopes[attempt] /= {}
+  /\ attempt_report_writers[attempt] = {}
+  /\ attempt_report_nodes' =
+      [attempt_report_nodes EXCEPT ![attempt] = attempt_envelopes[attempt]]
+  /\ attempt_report_status' =
+      [attempt_report_status EXCEPT ![attempt] = InlineReportStatus(attempt)]
+  /\ attempt_report_complete' =
+      [attempt_report_complete EXCEPT ![attempt] = ReportIsComplete(attempt)]
+  /\ attempt_report_writers' =
+      [attempt_report_writers EXCEPT ![attempt] = @ \cup {"inline"}]
+  /\ attempt_report_last_writer' =
+      [attempt_report_last_writer EXCEPT ![attempt] = "inline"]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED << allocated_attempts, active_attempts, attempt_graph,
+                  attempt_mode, attempt_source, attempt_selected_node,
+                  attempt_plan, attempt_passed_nodes,
+                  attempt_terminal_nodes, attempt_envelopes,
+                  attempt_context_items, attempt_saved_contexts,
+                  attempt_input_context, attempt_initial_context,
+                  attempt_trace, attempt_carrier, attempt_envelope_trace >>
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
+\* @command RegenerateAttemptReport
+\* @result WorkflowResult
+\* @port TestGraphProgramPort.regenerate_attempt_report
+RegenerateAttemptReport(attempt) ==
+  /\ attempt \in allocated_attempts \ active_attempts
+  /\ attempt_envelopes[attempt] /= {}
+  /\ attempt_report_nodes' =
+      [attempt_report_nodes EXCEPT ![attempt] = attempt_envelopes[attempt]]
+  /\ attempt_report_status' =
+      [attempt_report_status EXCEPT ![attempt] = ComputedReportStatus(attempt)]
+  /\ attempt_report_complete' =
+      [attempt_report_complete EXCEPT ![attempt] = ReportIsComplete(attempt)]
+  /\ attempt_report_writers' =
+      [attempt_report_writers EXCEPT ![attempt] = @ \cup {"manual"}]
+  /\ attempt_report_last_writer' =
+      [attempt_report_last_writer EXCEPT ![attempt] = "manual"]
+  /\ result' = [accepted |-> TRUE, reason |-> NoReason]
+  /\ UNCHANGED replay_integrity_vars
+  /\ UNCHANGED << allocated_attempts, active_attempts, attempt_graph,
+                  attempt_mode, attempt_source, attempt_selected_node,
+                  attempt_plan, attempt_passed_nodes,
+                  attempt_terminal_nodes, attempt_envelopes,
+                  attempt_context_items, attempt_saved_contexts,
+                  attempt_input_context, attempt_initial_context,
+                  attempt_trace, attempt_carrier, attempt_envelope_trace >>
+  /\ UNCHANGED legacy_program_vars
+  /\ UNCHANGED legacy_environment_scaffold_vars
+
 NoOp ==
   UNCHANGED vars
 
@@ -1115,7 +1735,73 @@ Next ==
   \/ \E g \in Graphs, b \in Branches,
         target \in EnvironmentTargets, backend \in EnvironmentBackends:
       SkipBranchEnvironmentDestroy(g, b, target, backend)
+  \/ \E g \in Graphs, attempt \in RunAttempts,
+        trace \in TraceIds, carrier \in TraceCarriers:
+      StartFullAttempt(g, attempt, trace, carrier)
+  \/ \E source \in RunAttempts, attempt \in RunAttempts,
+        mode \in {"resume", "run-only"}, selected \in SourceNodes:
+      StartReplayAttempt(source, attempt, mode, selected)
+  \/ \E attempt \in RunAttempts, node \in SourceNodes:
+      RunAttemptNodePass(attempt, node)
+  \/ \E attempt \in RunAttempts, node \in SourceNodes:
+      RunAttemptNodeTerminal(attempt, node)
+  \/ \E attempt \in RunAttempts:
+      FinishAttemptSuccess(attempt)
+  \/ \E attempt \in RunAttempts:
+      PublishAttemptClosure(attempt)
+  \/ \E source \in RunAttempts, selected \in SourceNodes:
+      AcquireReplaySource(source, selected)
+  \/ \E source \in RunAttempts:
+      TamperClosedAttemptEvidence(source)
+  \/ \E source \in RunAttempts, selected \in SourceNodes:
+      RejectTamperedReplaySource(source, selected)
+  \/ \E attempt \in RunAttempts:
+      WriteInlineAttemptReport(attempt)
+  \/ \E attempt \in RunAttempts:
+      RegenerateAttemptReport(attempt)
   \/ NoOp
+
+\* Replay.cfg deliberately permits one full source plus one focused replay.
+\* Keeping these restrictions in the transition relation, rather than a TLC
+\* state constraint, ensures invalid acquisition/tamper post-states are still
+\* explored and can violate the safety properties.
+FullAttempts ==
+  {attempt \in allocated_attempts : attempt_mode[attempt] = "full"}
+
+StartResumeAttempt(source, attempt) ==
+  StartReplayAttempt(source, attempt, "resume", PlanSecondNode)
+
+StartRunOnlyAttempt(source, attempt) ==
+  StartReplayAttempt(source, attempt, "run-only", PlanSecondNode)
+
+ReplayNext ==
+  \/ \E g \in Graphs:
+      PrepareReplayGraph(g)
+  \/ \E g \in Graphs, attempt \in RunAttempts,
+        trace \in TraceIds, carrier \in TraceCarriers:
+      StartFullAttempt(g, attempt, trace, carrier)
+  \/ \E source \in FullAttempts, attempt \in RunAttempts:
+      StartResumeAttempt(source, attempt)
+  \/ \E source \in FullAttempts, attempt \in RunAttempts:
+      StartRunOnlyAttempt(source, attempt)
+  \/ \E attempt \in RunAttempts, node \in SourceNodes:
+      RunAttemptNodePass(attempt, node)
+  \/ \E attempt \in RunAttempts, node \in SourceNodes:
+      RunAttemptNodeTerminal(attempt, node)
+  \/ \E attempt \in RunAttempts:
+      FinishAttemptSuccess(attempt)
+  \/ \E attempt \in RunAttempts:
+      PublishAttemptClosure(attempt)
+  \/ \E source \in FullAttempts:
+      AcquireReplaySource(source, PlanSecondNode)
+  \/ \E source \in FullAttempts:
+      TamperClosedAttemptEvidence(source)
+  \/ \E source \in FullAttempts:
+      RejectTamperedReplaySource(source, PlanSecondNode)
+  \/ \E attempt \in RunAttempts:
+      WriteInlineAttemptReport(attempt)
+  \/ \E attempt \in RunAttempts:
+      RegenerateAttemptReport(attempt)
 
 \* @invariant TypeInvariant
 TypeInvariant ==
@@ -1167,6 +1853,62 @@ TypeInvariant ==
   /\ LifecycleCommands /= {}
   /\ AwsTargets \subseteq EnvironmentTargets
   /\ AwsBackends \subseteq EnvironmentBackends
+  /\ RunAttempts \cap {NoAttempt} = {}
+  /\ Graphs \cap {NoGraph} = {}
+  /\ SourceNodes \cap {NoNode} = {}
+  /\ TraceIds \cap {NoTrace} = {}
+  /\ TraceCarriers \cap {NoCarrier} = {}
+  /\ PlanLength \in 1..3
+  /\ {PlanFirstNode, PlanSecondNode, PlanThirdNode} \subseteq SourceNodes
+  /\ GraphPlan \in Seq(SourceNodes)
+  /\ UniqueNodeSequence(GraphPlan)
+  /\ allocated_attempts \subseteq RunAttempts
+  /\ active_attempts \subseteq allocated_attempts
+  /\ attempt_graph \in [RunAttempts -> Graphs \cup {NoGraph}]
+  /\ attempt_mode \in
+      [RunAttempts -> {"none", "full", "resume", "run-only"}]
+  /\ attempt_source \in [RunAttempts -> RunAttempts \cup {NoAttempt}]
+  /\ attempt_selected_node \in [RunAttempts -> SourceNodes \cup {NoNode}]
+  /\ \A attempt \in RunAttempts:
+      attempt_plan[attempt] \in Seq(SourceNodes)
+  /\ attempt_passed_nodes \in [RunAttempts -> SUBSET SourceNodes]
+  /\ attempt_terminal_nodes \in [RunAttempts -> SUBSET SourceNodes]
+  /\ attempt_envelopes \in [RunAttempts -> SUBSET SourceNodes]
+  /\ attempt_context_items \in [RunAttempts -> Seq(AllContextItemFingerprints)]
+  /\ attempt_saved_contexts \in [RunAttempts -> SUBSET SourceNodes]
+  /\ attempt_input_context \in
+      [RunAttempts -> [SourceNodes -> Seq(AllContextItemFingerprints)]]
+  /\ attempt_initial_context \in
+      [RunAttempts -> Seq(AllContextItemFingerprints)]
+  /\ attempt_trace \in [RunAttempts -> TraceIds \cup {NoTrace}]
+  /\ attempt_carrier \in [RunAttempts -> TraceCarriers \cup {NoCarrier}]
+  /\ attempt_envelope_trace \in
+      [RunAttempts -> [SourceNodes -> TraceIds \cup {NoTrace}]]
+  /\ attempt_report_nodes \in [RunAttempts -> SUBSET SourceNodes]
+  /\ attempt_report_status \in
+      [RunAttempts -> {"none", "passed", "failed", "errored"}]
+  /\ attempt_report_complete \in [RunAttempts -> BOOLEAN]
+  /\ attempt_report_writers \in
+      [RunAttempts -> SUBSET {"inline", "manual"}]
+  /\ attempt_report_last_writer \in
+      [RunAttempts -> {"none", "inline", "manual"}]
+  /\ attempt_closed \subseteq allocated_attempts
+  /\ attempt_evidence_tampered \subseteq attempt_closed
+  /\ DOMAIN attempt_closure_fingerprint = RunAttempts
+  /\ \A attempt \in RunAttempts:
+      attempt_closure_fingerprint[attempt] \in
+        {NoEvidenceFingerprint, CanonicalAttemptEvidenceFingerprint(attempt)}
+  /\ acquired_replay_sources \subseteq ReplayKeys
+  /\ acquired_replay_context \in
+      [ReplayKeys -> Seq(AllContextItemFingerprints)]
+  /\ acquired_replay_trace \in [ReplayKeys -> TraceIds \cup {NoTrace}]
+  /\ acquired_replay_carrier \in
+      [ReplayKeys -> TraceCarriers \cup {NoCarrier}]
+  /\ DOMAIN acquired_replay_closure_fingerprint = ReplayKeys
+  /\ \A key \in ReplayKeys:
+      acquired_replay_closure_fingerprint[key] \in
+        {NoEvidenceFingerprint} \cup
+        {attempt_closure_fingerprint[attempt] : attempt \in RunAttempts}
   /\ result.accepted \in BOOLEAN
 
 \* @invariant ExplicitNodesAreAvailable
@@ -1211,13 +1953,14 @@ ContextContainsOnlyPassedPublishedData ==
 
 \* @invariant EveryAttemptGetsOneEnvelope
 EveryAttemptGetsOneEnvelope ==
-  \A g \in Graphs:
-    passed_nodes[g] \cup terminal_nodes[g] \subseteq envelopes[g]
+  \A attempt \in allocated_attempts:
+    attempt_passed_nodes[attempt] \cup attempt_terminal_nodes[attempt] =
+      attempt_envelopes[attempt]
 
 \* @invariant EveryAttemptHasSavedInputContext
 EveryAttemptHasSavedInputContext ==
-  \A g \in Graphs:
-    envelopes[g] \subseteq input_contexts[g]
+  \A attempt \in allocated_attempts:
+    attempt_envelopes[attempt] = attempt_saved_contexts[attempt]
 
 \* @invariant RerunGuidanceOnlyForRerunnableFailures
 RerunGuidanceOnlyForRerunnableFailures ==
@@ -1227,19 +1970,190 @@ RerunGuidanceOnlyForRerunnableFailures ==
 
 \* @invariant ResumptionsUseSavedInputContext
 ResumptionsUseSavedInputContext ==
-  \A g \in Graphs:
-    (resumed_nodes[g] \cup single_node_reruns[g]) \subseteq input_contexts[g]
+  \A attempt \in ReplayAttempts:
+    LET source == attempt_source[attempt]
+        selected == attempt_selected_node[attempt]
+        key == ReplayKey(source, selected)
+    IN
+      /\ selected \in attempt_saved_contexts[source]
+      /\ key \in acquired_replay_sources
+      /\ attempt_initial_context[attempt] = acquired_replay_context[key]
+      /\ acquired_replay_context[key] =
+          attempt_input_context[source][selected]
 
 \* @invariant BuildRerunsRespectDependencies
 BuildRerunsRespectDependencies ==
-  \A g \in Graphs:
-    \A n \in resumed_nodes[g] \cup single_node_reruns[g]:
-      MergedDeps(g, n) \subseteq passed_nodes[g]
+  \A attempt \in ReplayAttempts:
+    SequencePredecessors(GraphPlan, attempt_selected_node[attempt]) \subseteq
+      ContextNodeIds(attempt_initial_context[attempt])
 
 \* @invariant ReportsHaveEnvelopeEvidence
 ReportsHaveEnvelopeEvidence ==
   \A g \in run_reports:
     envelopes[g] /= {}
+
+\* @invariant AttemptIdentityIsGraphScoped
+AttemptIdentityIsGraphScoped ==
+  \A attempt \in allocated_attempts:
+    /\ attempt_graph[attempt] \in Graphs
+    /\ attempt_mode[attempt] \in {"full", "resume", "run-only"}
+    /\ attempt_plan[attempt] /= <<>>
+    /\ UniqueNodeSequence(attempt_plan[attempt])
+    /\ AttemptNodes(attempt) \subseteq SequenceNodes(GraphPlan)
+    /\ attempt_trace[attempt] \in TraceIds
+    /\ attempt_carrier[attempt] \in TraceCarriers
+
+\* @invariant ReplayScopeMatchesMode
+ReplayScopeMatchesMode ==
+  /\ \A attempt \in allocated_attempts:
+      attempt_mode[attempt] = "full" =>
+        /\ attempt_source[attempt] = NoAttempt
+        /\ attempt_selected_node[attempt] = NoNode
+        /\ attempt_plan[attempt] = GraphPlan
+        /\ attempt_initial_context[attempt] = <<>>
+  /\ \A attempt \in ReplayAttempts:
+      LET source == attempt_source[attempt]
+          selected == attempt_selected_node[attempt]
+      IN
+        /\ source \in allocated_attempts
+        /\ source /= attempt
+        /\ selected \in SequenceNodes(GraphPlan)
+        /\ attempt_graph[attempt] = attempt_graph[source]
+        /\ IF attempt_mode[attempt] = "resume"
+           THEN attempt_plan[attempt] = SequenceTailFrom(GraphPlan, selected)
+           ELSE attempt_plan[attempt] = <<selected>>
+
+\* @invariant ReplaySourceAttemptsAreClosed
+ReplaySourceAttemptsAreClosed ==
+  /\ ReplaySourceAttempts \subseteq allocated_attempts
+  /\ ReplaySourceAttempts \subseteq attempt_closed
+  /\ ReplaySourceAttempts \cap active_attempts = {}
+
+\* @invariant ReplayTraceCarrierContinuity
+ReplayTraceCarrierContinuity ==
+  \A attempt \in ReplayAttempts:
+    LET source == attempt_source[attempt]
+        selected == attempt_selected_node[attempt]
+        key == ReplayKey(source, selected)
+    IN
+      /\ key \in acquired_replay_sources
+      /\ attempt_trace[attempt] = acquired_replay_trace[key]
+      /\ attempt_carrier[attempt] = acquired_replay_carrier[key]
+
+\* @invariant CarrierIdentifiesOneTrace
+CarrierIdentifiesOneTrace ==
+  \A first \in allocated_attempts, second \in allocated_attempts:
+    attempt_carrier[first] = attempt_carrier[second] =>
+      attempt_trace[first] = attempt_trace[second]
+
+\* @invariant FullAttemptsMintIndependentTraceCarriers
+FullAttemptsMintIndependentTraceCarriers ==
+  \A first \in allocated_attempts, second \in allocated_attempts:
+    /\ first /= second
+    /\ attempt_mode[first] = "full"
+    /\ attempt_mode[second] = "full"
+    => /\ attempt_carrier[first] /= attempt_carrier[second]
+       /\ attempt_trace[first] /= attempt_trace[second]
+
+\* @invariant AttemptEvidenceIsScoped
+AttemptEvidenceIsScoped ==
+  \A attempt \in allocated_attempts:
+    /\ attempt_passed_nodes[attempt] \subseteq AttemptNodes(attempt)
+    /\ attempt_terminal_nodes[attempt] \subseteq AttemptNodes(attempt)
+    /\ attempt_envelopes[attempt] \subseteq AttemptNodes(attempt)
+    /\ attempt_passed_nodes[attempt] \cap
+        attempt_terminal_nodes[attempt] = {}
+
+\* @invariant AttemptContextIsAttemptLocal
+AttemptContextIsAttemptLocal ==
+  \A attempt \in allocated_attempts:
+    /\ attempt_context_items[attempt] = ExpectedAttemptContext(attempt)
+    /\ \A node \in attempt_saved_contexts[attempt]:
+        /\ attempt_input_context[attempt][node] =
+            ExpectedNodeInputContext(attempt, node)
+        /\ node \notin ContextNodeIds(attempt_input_context[attempt][node])
+
+\* @invariant AttemptClosuresBindExactEvidence
+AttemptClosuresBindExactEvidence ==
+  \A attempt \in attempt_closed:
+    /\ attempt_closure_fingerprint[attempt] =
+         CanonicalAttemptEvidenceFingerprint(attempt)
+    /\ (attempt \notin attempt_evidence_tampered =>
+          ClosureMatchesCurrentEvidence(attempt))
+    /\ (attempt \in attempt_evidence_tampered =>
+          ~ClosureMatchesCurrentEvidence(attempt))
+
+\* @invariant TamperedUnacquiredSourcesFailValidation
+TamperedUnacquiredSourcesFailValidation ==
+  \A source \in attempt_evidence_tampered:
+    ~ClosureMatchesCurrentEvidence(source)
+
+\* @invariant AcquiredReplaySnapshotsAreClosureBound
+AcquiredReplaySnapshotsAreClosureBound ==
+  \A key \in acquired_replay_sources:
+    /\ key.source \in attempt_closed
+    /\ key.selected \in attempt_saved_contexts[key.source]
+    /\ acquired_replay_context[key] =
+         attempt_input_context[key.source][key.selected]
+    /\ acquired_replay_trace[key] = attempt_trace[key.source]
+    /\ acquired_replay_carrier[key] = attempt_carrier[key.source]
+    /\ acquired_replay_closure_fingerprint[key] =
+         attempt_closure_fingerprint[key.source]
+
+\* @invariant AttemptEnvelopeTraceContinuity
+AttemptEnvelopeTraceContinuity ==
+  \A attempt \in allocated_attempts, node \in SourceNodes:
+    IF node \in attempt_envelopes[attempt]
+    THEN attempt_envelope_trace[attempt][node] = attempt_trace[attempt]
+    ELSE attempt_envelope_trace[attempt][node] = NoTrace
+
+\* @invariant AttemptReportsAreTruthful
+AttemptReportsAreTruthful ==
+  \A attempt \in allocated_attempts:
+    IF attempt_report_writers[attempt] = {}
+    THEN /\ attempt_report_nodes[attempt] = {}
+         /\ attempt_report_status[attempt] = "none"
+         /\ attempt_report_complete[attempt] = FALSE
+         /\ attempt_report_last_writer[attempt] = "none"
+    ELSE LET currentStatus ==
+               IF attempt_report_last_writer[attempt] = "inline"
+               THEN InlineReportStatus(attempt)
+               ELSE ComputedReportStatus(attempt)
+         IN /\ attempt_report_nodes[attempt] = attempt_envelopes[attempt]
+            /\ attempt_report_last_writer[attempt] \in
+                attempt_report_writers[attempt]
+            \* A report written before closure may remain conservatively
+            \* ERRORED/incomplete until explicitly regenerated. It may never
+            \* be more optimistic than current closure-validated evidence.
+            /\ attempt_report_status[attempt] \in {"errored", currentStatus}
+            /\ (attempt_report_complete[attempt] =>
+                  ReportIsComplete(attempt))
+            /\ (attempt_report_status[attempt] = "passed" =>
+                  attempt_report_complete[attempt])
+
+\* @invariant IncompleteAttemptReportsNeverPass
+IncompleteAttemptReportsNeverPass ==
+  \A attempt \in allocated_attempts:
+    attempt_report_status[attempt] = "passed" =>
+      /\ attempt_report_complete[attempt]
+      /\ attempt_report_nodes[attempt] = AttemptNodes(attempt)
+
+\* Closure fingerprints and already-acquired snapshots are immutable. Raw
+\* source evidence may be externally changed, which is modeled explicitly by
+\* TamperClosedAttemptEvidence; a change before acquisition fails validation,
+\* while a change after acquisition cannot alter the captured values below.
+\* @property ClosedEvidenceBindingsAndAcquiredSnapshotsAreImmutable
+ReplayEvidenceBindingStep ==
+  /\ \A source \in attempt_closed:
+      UNCHANGED attempt_closure_fingerprint[source]
+  /\ \A key \in acquired_replay_sources:
+      UNCHANGED << acquired_replay_context[key],
+                   acquired_replay_trace[key],
+                   acquired_replay_carrier[key],
+                   acquired_replay_closure_fingerprint[key] >>
+
+ClosedEvidenceBindingsAndAcquiredSnapshotsAreImmutable ==
+  [][ReplayEvidenceBindingStep]_vars
 
 \* @invariant PackageCatalogIsCompleteAfterScaffold
 PackageCatalogIsCompleteAfterScaffold ==
@@ -1322,5 +2236,8 @@ RuntimeContextVerificationIsTyped ==
 
 Spec ==
   Init /\ [][Next]_vars
+
+ReplaySpec ==
+  Init /\ [][ReplayNext]_vars
 
 =============================================================================

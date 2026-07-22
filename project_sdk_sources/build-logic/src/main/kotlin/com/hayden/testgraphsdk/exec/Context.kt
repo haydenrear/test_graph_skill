@@ -4,7 +4,15 @@ import com.hayden.testgraphsdk.MiniJson
 import com.hayden.testgraphsdk.requireValidNodeId
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.charset.CodingErrorAction
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import java.util.Collections
 
 /** Plugin-side mirror of the SDK ContextItem. */
 data class ContextItem(val nodeId: String, val data: Map<String, String>) {
@@ -12,6 +20,102 @@ data class ContextItem(val nodeId: String, val data: Map<String, String>) {
         requireValidNodeId(nodeId, "context nodeId")
     }
 }
+
+/**
+ * One verified, in-memory replay source.  Replay code receives this value
+ * instead of the source directory so validation and use cannot be separated
+ * by another pathname lookup.
+ *
+ * The closure is an integrity boundary for ordinary/protocol mutation.  It is
+ * not an authenticity boundary against an owner who can rewrite both the
+ * evidence and the closure; that stronger threat requires an external trust
+ * anchor (for example a signature, MAC, or WORM store).
+ */
+internal data class ReplaySourceSnapshot(
+    val sourceBuild: File,
+    val graphName: String,
+    val selectedNodeId: String,
+    val sourceExpectedNodeIds: List<String>,
+    val traceId: String,
+    val carrierJson: String,
+    val carrier: Map<String, String>,
+    val selectedContextJson: String,
+    val selectedContext: List<ContextItem>,
+    val closureSha256: String,
+    val selectedContextSha256: String,
+) {
+    init {
+        require(sourceBuild.isAbsolute) { "replay source snapshot path must be absolute" }
+        requireValidNodeId(selectedNodeId, "replay source snapshot nodeId")
+        require(sourceExpectedNodeIds.isNotEmpty()) {
+            "replay source snapshot execution scope must not be empty"
+        }
+        require(sourceExpectedNodeIds.distinct().size == sourceExpectedNodeIds.size) {
+            "replay source snapshot execution scope must contain unique node ids"
+        }
+        sourceExpectedNodeIds.forEach { requireValidNodeId(it, "replay source scope nodeId") }
+        require(selectedNodeId in sourceExpectedNodeIds) {
+            "replay source snapshot scope does not contain '$selectedNodeId'"
+        }
+        require(SHA256_HEX.matches(closureSha256)) {
+            "replay source closure SHA-256 must be lowercase hexadecimal"
+        }
+        require(SHA256_HEX.matches(selectedContextSha256)) {
+            "replay source context SHA-256 must be lowercase hexadecimal"
+        }
+    }
+
+    companion object {
+        fun immutable(
+            sourceBuild: File,
+            graphName: String,
+            selectedNodeId: String,
+            sourceExpectedNodeIds: List<String>,
+            traceId: String,
+            carrierJson: String,
+            carrier: Map<String, String>,
+            selectedContextJson: String,
+            selectedContext: List<ContextItem>,
+            closureSha256: String,
+            selectedContextSha256: String,
+        ): ReplaySourceSnapshot {
+            val frozenCarrier = Collections.unmodifiableMap(LinkedHashMap(carrier))
+            val frozenExpectedNodeIds = Collections.unmodifiableList(sourceExpectedNodeIds.toList())
+            val frozenContext = Collections.unmodifiableList(
+                selectedContext.map { item ->
+                    ContextItem(
+                        item.nodeId,
+                        Collections.unmodifiableMap(LinkedHashMap(item.data)),
+                    )
+                }
+            )
+            return ReplaySourceSnapshot(
+                sourceBuild = sourceBuild.canonicalFile,
+                graphName = graphName,
+                selectedNodeId = selectedNodeId,
+                sourceExpectedNodeIds = frozenExpectedNodeIds,
+                traceId = traceId,
+                carrierJson = carrierJson,
+                carrier = frozenCarrier,
+                selectedContextJson = selectedContextJson,
+                selectedContext = frozenContext,
+                closureSha256 = closureSha256,
+                selectedContextSha256 = selectedContextSha256,
+            )
+        }
+    }
+}
+
+internal data class BoundedUtf8File(
+    val text: String,
+    val sha256: String,
+    val size: Int,
+)
+
+internal data class BoundedFileDigest(
+    val sha256: String,
+    val size: Long,
+)
 
 /**
  * Threshold (in characters of serialized JSON) below which the Context[]
@@ -61,18 +165,33 @@ object ContextSerde {
         return contextItems(parseBoundedJsonObject(json, "context"))
     }
 
+    internal fun fromParsed(root: Map<String, Any?>): List<ContextItem> =
+        contextItems(root)
+
     internal fun fromJson(file: File): List<ContextItem> {
         val (_, root) = readBoundedJsonObject(file, "context file ${file.name}")
         return contextItems(root)
     }
 
+    internal fun validateSnapshot(file: File): Int {
+        val (json, root) = readBoundedJsonObject(file, "context file ${file.name}")
+        contextItems(root)
+        return json.toByteArray(Charsets.UTF_8).size
+    }
+
     private fun contextItems(root: Map<String, Any?>): List<ContextItem> {
+        require(root.keys == setOf("items")) {
+            "context root must contain exactly the 'items' field"
+        }
         val rawItems = root["items"] as? List<*>
             ?: throw IllegalArgumentException("context items must be a JSON array")
         val seenNodeIds = mutableSetOf<String>()
         return rawItems.mapIndexed { index, raw ->
             val obj = raw as? Map<*, *>
                 ?: throw IllegalArgumentException("context item $index must be a JSON object")
+            require(obj.keys == setOf("nodeId", "data")) {
+                "context item $index must contain exactly nodeId and data"
+            }
             val nodeId = obj["nodeId"] as? String
                 ?: throw IllegalArgumentException("context item $index must have a string nodeId")
             if (!seenNodeIds.add(nodeId)) {
@@ -185,8 +304,37 @@ private fun quotedJsonUtf8Bytes(value: String): Long {
     return bytes
 }
 
-internal fun parseBoundedJsonObject(json: String, label: String): Map<String, Any?> {
-    validateBoundedJson(json, label)
+internal class AggregateJsonStructureBudget(
+    private val maxStructuralTokens: Int,
+) {
+    init {
+        require(maxStructuralTokens > 0) { "aggregate JSON structural-token limit must be positive" }
+    }
+
+    var consumedStructuralTokens: Int = 0
+        private set
+    var exceeded: Boolean = false
+        private set
+
+    internal fun consume(structuralTokens: Int, label: String) {
+        require(structuralTokens >= 0) { "JSON structural-token count must be non-negative" }
+        if (consumedStructuralTokens > maxStructuralTokens - structuralTokens) {
+            exceeded = true
+            throw IllegalArgumentException(
+                "$label exceeds the aggregate JSON structural-token limit of $maxStructuralTokens"
+            )
+        }
+        consumedStructuralTokens += structuralTokens
+    }
+}
+
+internal fun parseBoundedJsonObject(
+    json: String,
+    label: String,
+    aggregateBudget: AggregateJsonStructureBudget? = null,
+): Map<String, Any?> {
+    val structuralTokens = validateBoundedJson(json, label)
+    aggregateBudget?.consume(structuralTokens, label)
     val parsed = MiniJson.parse(json)
     @Suppress("UNCHECKED_CAST")
     return parsed as? Map<String, Any?>
@@ -198,27 +346,129 @@ internal fun readBoundedJsonObject(
     file: File,
     label: String,
     maxUtf8Bytes: Int = CONTEXT_JSON_MAX_UTF8_BYTES,
+    aggregateBudget: AggregateJsonStructureBudget? = null,
 ): Pair<String, Map<String, Any?>> {
     require(maxUtf8Bytes in 1..CONTEXT_JSON_MAX_UTF8_BYTES) {
         "JSON byte limit must be between 1 and $CONTEXT_JSON_MAX_UTF8_BYTES"
     }
-    if (!file.isFile) throw IllegalArgumentException("$label is not a file")
-    if (file.length() > maxUtf8Bytes) {
-        throw IllegalArgumentException("$label exceeds $maxUtf8Bytes UTF-8 bytes")
-    }
-    val bytes = file.inputStream().use { input ->
-        input.readNBytes(maxUtf8Bytes + 1)
-    }
-    if (bytes.size > maxUtf8Bytes) {
-        throw IllegalArgumentException("$label exceeds $maxUtf8Bytes UTF-8 bytes")
-    }
-    val json = Charsets.UTF_8.newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
-        .decode(ByteBuffer.wrap(bytes))
-        .toString()
-    return json to parseBoundedJsonObject(json, label)
+    val json = readBoundedUtf8RegularFile(file, label, maxUtf8Bytes).text
+    return json to parseBoundedJsonObject(json, label, aggregateBudget)
 }
+
+/**
+ * Open and consume one regular file through a single no-follow descriptor.
+ * The pre-open pathname check is diagnostic only; NOFOLLOW_LINKS on the open
+ * is the security boundary.  A size change while that descriptor is being
+ * consumed fails closed.
+ */
+internal fun readBoundedUtf8RegularFile(
+    file: File,
+    label: String,
+    maxUtf8Bytes: Int = CONTEXT_JSON_MAX_UTF8_BYTES,
+): BoundedUtf8File {
+    require(maxUtf8Bytes in 1..CONTEXT_JSON_MAX_UTF8_BYTES) {
+        "file byte limit must be between 1 and $CONTEXT_JSON_MAX_UTF8_BYTES"
+    }
+    val bytes = readBoundedRegularFileBytes(file, label, maxUtf8Bytes)
+    val text = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (e: Exception) {
+        throw IllegalArgumentException("$label is not valid UTF-8", e)
+    }
+    return BoundedUtf8File(text, sha256Hex(bytes), bytes.size)
+}
+
+internal fun digestBoundedRegularFile(
+    file: File,
+    label: String,
+    maxBytes: Int = CONTEXT_JSON_MAX_UTF8_BYTES,
+): BoundedFileDigest {
+    require(maxBytes in 1..CONTEXT_JSON_MAX_UTF8_BYTES) {
+        "file byte limit must be between 1 and $CONTEXT_JSON_MAX_UTF8_BYTES"
+    }
+    val path = file.toPath()
+    if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+        throw IllegalArgumentException("$label is not a regular file or is a symlink")
+    }
+    try {
+        FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            val initialSize = channel.size()
+            if (initialSize > maxBytes) {
+                throw IllegalArgumentException("$label exceeds $maxBytes bytes")
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteBuffer.allocate(64 * 1024)
+            var total = 0L
+            while (true) {
+                buffer.clear()
+                val read = channel.read(buffer)
+                if (read < 0) break
+                if (read == 0) continue
+                total += read
+                if (total > maxBytes) {
+                    throw IllegalArgumentException("$label exceeds $maxBytes bytes")
+                }
+                buffer.flip()
+                digest.update(buffer)
+            }
+            if (channel.size() != initialSize || total != initialSize) {
+                throw IllegalArgumentException("$label changed while it was being read")
+            }
+            return BoundedFileDigest(digest.digest().toHex(), total)
+        }
+    } catch (e: IllegalArgumentException) {
+        throw e
+    } catch (e: Exception) {
+        throw IllegalArgumentException("could not read $label without following links", e)
+    }
+}
+
+private fun readBoundedRegularFileBytes(file: File, label: String, maxBytes: Int): ByteArray {
+    val path = file.toPath()
+    if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+        throw IllegalArgumentException("$label is not a regular file or is a symlink")
+    }
+    try {
+        FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
+            val initialSize = channel.size()
+            if (initialSize > maxBytes) {
+                throw IllegalArgumentException("$label exceeds $maxBytes UTF-8 bytes")
+            }
+            val buffer = ByteBuffer.allocate(maxUtf8Allocation(initialSize, maxBytes))
+            while (buffer.hasRemaining()) {
+                if (channel.read(buffer) < 0) break
+            }
+            val total = buffer.position()
+            if (total > maxBytes || channel.size() != initialSize || total.toLong() != initialSize) {
+                throw IllegalArgumentException("$label changed while it was being read")
+            }
+            return buffer.array().copyOf(total)
+        }
+    } catch (e: IllegalArgumentException) {
+        throw e
+    } catch (e: Exception) {
+        throw IllegalArgumentException("could not read $label without following links", e)
+    }
+}
+
+private fun maxUtf8Allocation(size: Long, maxBytes: Int): Int {
+    require(size >= 0 && size <= maxBytes)
+    return size.toInt().coerceAtLeast(1)
+}
+
+internal fun sha256Hex(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256").digest(bytes).toHex()
+
+internal fun sha256Utf8(value: String): String = sha256Hex(value.toByteArray(Charsets.UTF_8))
+
+private fun ByteArray.toHex(): String =
+    joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
 
 private fun strictStringMap(raw: Any?, label: String): Map<String, String> {
     val map = raw as? Map<*, *>
@@ -238,7 +488,7 @@ private fun strictStringMap(raw: Any?, label: String): Map<String, String> {
  * parser's eventual call depth and retained input before any object/list is
  * allocated, and rejects malformed delimiter/string structure fail-closed.
  */
-private fun validateBoundedJson(json: String, label: String) {
+private fun validateBoundedJson(json: String, label: String): Int {
     boundedUtf8Length(json, label)
     val delimiters = java.util.ArrayDeque<Char>()
     var structuralTokens = 0
@@ -324,6 +574,7 @@ private fun validateBoundedJson(json: String, label: String) {
     }
     if (inString) throw IllegalArgumentException("$label has an unterminated string")
     if (delimiters.isNotEmpty()) throw IllegalArgumentException("$label has unclosed delimiters")
+    return structuralTokens
 }
 
 private fun boundedUtf8Length(value: String, label: String) {
@@ -366,8 +617,13 @@ internal fun writeInputContextSnapshot(
     nodeId: String,
 ): File {
     val file = inputContextSnapshotFile(reportRoot, nodeId)
-    file.parentFile.mkdirs()
-    file.writeText(ContextSerde.toJson(items))
+    requireRealDirectory(reportRoot, "context snapshot report root")
+    ensureRealDirectory(file.parentFile, "context snapshot directory")
+    publishImmutableEvidence(
+        file.toPath(),
+        ContextSerde.toJson(items).toByteArray(Charsets.UTF_8),
+        "input context snapshot for node '$nodeId'",
+    )
     return file
 }
 
@@ -380,12 +636,39 @@ internal fun readInputContextSnapshot(
     nodeId: String,
 ): List<ContextItem> {
     val file = inputContextSnapshotFile(reportRoot, nodeId)
-    if (!file.isFile) {
+    if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
         throw IllegalArgumentException(
-            "saved input context for node '$nodeId' was not found at ${file.absolutePath}"
+            "saved input context for node '$nodeId' was not found as a regular non-symlink file " +
+                    "at ${file.absolutePath}"
         )
     }
     return ContextSerde.fromJson(file)
+}
+
+/** Publish the already-validated raw source snapshot into a fresh attempt. */
+internal fun writeCapturedInputContextSnapshot(
+    snapshot: ReplaySourceSnapshot,
+    reportRoot: File,
+    nodeId: String,
+): File {
+    require(nodeId == snapshot.selectedNodeId) {
+        "captured replay context belongs to '${snapshot.selectedNodeId}', not '$nodeId'"
+    }
+    require(sha256Utf8(snapshot.selectedContextJson) == snapshot.selectedContextSha256) {
+        "captured replay context digest changed in memory"
+    }
+    require(ContextSerde.fromJson(snapshot.selectedContextJson) == snapshot.selectedContext) {
+        "captured replay context semantic value changed in memory"
+    }
+    val file = inputContextSnapshotFile(reportRoot, nodeId)
+    requireRealDirectory(reportRoot, "context snapshot report root")
+    ensureRealDirectory(file.parentFile, "context snapshot directory")
+    publishImmutableEvidence(
+        file.toPath(),
+        snapshot.selectedContextJson.toByteArray(Charsets.UTF_8),
+        "captured input context snapshot for node '$nodeId'",
+    )
+    return file
 }
 
 internal fun inputContextSnapshotFile(reportRoot: File, nodeId: String): File =
@@ -395,18 +678,65 @@ internal fun inputContextSnapshotFile(reportRoot: File, nodeId: String): File =
     )
 
 /**
- * Writes the Context[] inline or to disk depending on size, and returns
- * the string to pass as --context=<value>.
+ * Publish an already-complete evidence inode in one no-replace operation.
+ * Existing regular files, symlinks (including dangling symlinks), and other
+ * filesystem entries are never followed or replaced.
+ */
+internal fun publishImmutableEvidence(target: Path, encoded: ByteArray, label: String) {
+    val parent = target.parent
+        ?: throw IllegalArgumentException("$label requires a parent directory")
+    require(Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
+        "$label parent must be a real directory, not a symlink: $parent"
+    }
+    val temp = Files.createTempFile(parent, ".${target.fileName}-", ".tmp")
+    try {
+        FileChannel.open(temp, StandardOpenOption.WRITE).use { channel ->
+            val bytes = ByteBuffer.wrap(encoded)
+            while (bytes.hasRemaining()) channel.write(bytes)
+            channel.force(true)
+        }
+        try {
+            Files.createLink(target, temp)
+        } catch (e: FileAlreadyExistsException) {
+            throw IllegalArgumentException(
+                "$label already exists and will not be replaced: $target",
+                e,
+            )
+        } catch (e: UnsupportedOperationException) {
+            throw IllegalStateException(
+                "$label publication requires same-filesystem hard-link support",
+                e,
+            )
+        }
+    } finally {
+        Files.deleteIfExists(temp)
+    }
+}
+
+internal fun ensureRealDirectory(directory: File, label: String) {
+    try {
+        Files.createDirectory(directory.toPath())
+    } catch (_: FileAlreadyExistsException) {
+        // Validate the existing entry below without following symlinks.
+    }
+    requireRealDirectory(directory, label)
+}
+
+internal fun requireRealDirectory(directory: File, label: String) {
+    require(Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        "$label must be a real directory, not a symlink: ${directory.absolutePath}"
+    }
+}
+
+/**
+ * Returns the Context[] inline when small, otherwise references the canonical
+ * input snapshot that was already persisted before node execution.
  */
 internal fun encodeContextArg(
     items: List<ContextItem>,
-    reportRoot: File,
-    stepIndex: Int,
+    inputContextFile: File,
 ): String {
     val json = ContextSerde.toJson(items)
     if (json.length <= CONTEXT_INLINE_LIMIT) return json
-    val dir = File(reportRoot, "context").apply { mkdirs() }
-    val file = File(dir, "step-%03d.json".format(stepIndex))
-    file.writeText(json)
-    return "@" + file.absolutePath
+    return "@" + inputContextFile.absolutePath
 }

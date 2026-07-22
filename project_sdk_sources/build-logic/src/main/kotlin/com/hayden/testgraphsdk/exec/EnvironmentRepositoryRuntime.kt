@@ -5,7 +5,6 @@ import com.hayden.testgraphsdk.MiniJson
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import java.io.File
 import java.net.URI
-import java.util.concurrent.TimeUnit
 
 internal data class EnvironmentRepositoryCommandRecord(
     val label: String,
@@ -257,24 +256,28 @@ internal class EnvironmentRepositoryRuntime(
         val stderrLog = if (separateOutput) logFile(nodeId, "$label.stderr") else null
         log.parentFile.mkdirs()
         stderrLog?.parentFile?.mkdirs()
-        val builder = ProcessBuilder(argv)
+        val managedCommand = PosixProcessGroupController.wrap(argv)
+        val builder = ProcessBuilder(managedCommand.arguments)
             .directory(cwd)
             .redirectErrorStream(!separateOutput)
             .redirectOutput(log)
             .also { it.environment().putAll(environment) }
         if (stderrLog != null) builder.redirectError(stderrLog)
         val process = builder.start()
-        val finished = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
-        val exitCode = if (finished) {
-            process.exitValue()
-        } else {
-            process.destroyForcibly()
-            try { process.waitFor(2, TimeUnit.SECONDS) } catch (_: InterruptedException) {}
-            -1
+        val outcome = awaitWithTimeout(process, timeoutMillis, managedCommand)
+        val finished = outcome !is ExecutionOutcome.TimedOut
+        val exitCode = when (outcome) {
+            is ExecutionOutcome.Completed -> outcome.exitCode
+            is ExecutionOutcome.ProcessContractViolation -> outcome.exitCode
+            ExecutionOutcome.TimedOut -> -1
         }
         val record = EnvironmentRepositoryCommandRecord(label, argv, exitCode, log, stderrLog)
         if (!finished) {
             error("environmentRepository command '$label' timed out after ${timeoutMillis}ms; see ${commandLogReference(record)}")
+        }
+        if (outcome is ExecutionOutcome.ProcessContractViolation) {
+            error("environmentRepository command '$label' violated the process contract: " +
+                    "${outcome.reason}; see ${commandLogReference(record)}")
         }
         if (checkExitCode && exitCode != 0) {
             error("environmentRepository command '$label' failed with exit $exitCode; see ${commandLogReference(record)}")
