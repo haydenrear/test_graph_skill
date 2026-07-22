@@ -1,7 +1,10 @@
 package com.hayden.testgraphsdk.tasks
 
-import com.hayden.testgraphsdk.MiniJson
+import com.hayden.testgraphsdk.exec.readBoundedJsonObject
+import com.hayden.testgraphsdk.exec.CONTEXT_JSON_MAX_UTF8_BYTES
+import com.hayden.testgraphsdk.isValidNodeId
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Writes one {@code summary.json} + one {@code report.md} for a single
@@ -30,83 +33,350 @@ import java.io.File
  */
 internal object RunReportWriter {
 
+    data class Outcome(
+        val written: Boolean,
+        val status: String?,
+        val complete: Boolean,
+    ) {
+        val passed: Boolean
+            get() = written && complete && status == "passed"
+    }
+
+    private data class ReportIntegrity(
+        val expectedNodeIds: List<String>,
+        val observedNodeIds: List<String>,
+        val missingNodeIds: List<String>,
+        val invalidEnvelopeFiles: List<String>,
+        val duplicateNodeIds: List<String>,
+        val unexpectedNodeIds: List<String>,
+        val unknownStatusNodeIds: List<String>,
+        val missingTraceNodeIds: List<String>,
+        val invalidTraceNodeIds: List<String>,
+        val mismatchedTraceNodeIds: List<String>,
+        val emptyEvidence: Boolean,
+        val envelopeFileCountExceeded: Boolean,
+        val aggregateEnvelopeBytesExceeded: Boolean,
+        val executionFailure: Throwable?,
+    ) {
+        val errored: Boolean
+            get() = executionFailure != null || missingNodeIds.isNotEmpty() ||
+                    invalidEnvelopeFiles.isNotEmpty() || duplicateNodeIds.isNotEmpty() ||
+                    unexpectedNodeIds.isNotEmpty() || unknownStatusNodeIds.isNotEmpty() ||
+                    missingTraceNodeIds.isNotEmpty() || invalidTraceNodeIds.isNotEmpty() ||
+                    mismatchedTraceNodeIds.isNotEmpty() ||
+                    emptyEvidence || envelopeFileCountExceeded || aggregateEnvelopeBytesExceeded
+
+        val complete: Boolean
+            get() = !errored
+    }
+
     /**
      * Render {@code <runDir>/summary.json} + {@code <runDir>/report.md}
      * from the envelopes already on disk under {@code <runDir>/envelope/}.
      * Idempotent — re-running overwrites both files. No-op when the run
      * dir doesn't have an envelope/ subdir yet.
      *
-     * @return true when both files were written, false if there was no
-     *         envelope dir to summarize.
+     * @return the rendered status and integrity decision, or an unwritten
+     *         outcome if there was no envelope dir to summarize.
      */
-    fun writeRunReport(runDir: File): Boolean {
+    fun writeRunReport(
+        runDir: File,
+        expectedNodeIds: List<String> = emptyList(),
+        executionFailure: Throwable? = null,
+        expectedTraceId: String? = null,
+    ): Outcome {
+        require(expectedNodeIds.size <= MAX_ENVELOPE_FILES) {
+            "expected node count exceeds the absolute report limit of $MAX_ENVELOPE_FILES"
+        }
+        require(expectedNodeIds.all(::isValidNodeId)) {
+            "expected node ids must match [a-z0-9._-]{1,128}"
+        }
+        require(expectedNodeIds.distinct().size == expectedNodeIds.size) {
+            "expected node ids must be unique"
+        }
+        require(expectedTraceId == null || TRACE_ID.matches(expectedTraceId)) {
+            "expected trace id must be 32 lowercase hexadecimal characters"
+        }
         val envelopeDir = File(runDir, "envelope")
-        if (!envelopeDir.isDirectory) return false
-        val envelopeFiles = envelopeDir.listFiles { f -> f.extension == "json" }
-            ?.sortedBy { it.name } ?: emptyList()
-        val traceId = envelopeFiles.firstNotNullOfOrNull { file ->
-            try {
-                (MiniJson.parse(file.readText()) as? Map<*, *>)?.get("traceId") as? String
+        if (!envelopeDir.isDirectory && expectedNodeIds.isEmpty() && executionFailure == null) {
+            return Outcome(written = false, status = null, complete = false)
+        }
+        val envelopeFileLimit = envelopeFileLimit(expectedNodeIds.size)
+        val envelopeScan = scanEnvelopeFiles(envelopeDir, envelopeFileLimit)
+        val envelopeFiles = envelopeScan.files
+        var retainedEnvelopeBytes = 0L
+        var aggregateEnvelopeBytesExceeded = false
+        for (file in envelopeFiles) {
+            val fileBytes = file.length()
+            if (fileBytes > CONTEXT_JSON_MAX_UTF8_BYTES) continue
+            if (retainedEnvelopeBytes > MAX_AGGREGATE_ENVELOPE_BYTES - fileBytes) {
+                aggregateEnvelopeBytesExceeded = true
+                break
+            }
+            retainedEnvelopeBytes += fileBytes
+        }
+        val invalidEnvelopeFiles = mutableListOf<String>()
+        val parsed = if (aggregateEnvelopeBytesExceeded) {
+            invalidEnvelopeFiles += envelopeFiles.map { it.name }
+            emptyList()
+        } else envelopeFiles.mapNotNull { file ->
+            val bounded = try {
+                readBoundedJsonObject(file, "envelope/${file.name}")
             } catch (_: Exception) {
                 null
             }
+            if (bounded == null) {
+                invalidEnvelopeFiles += file.name
+                null
+            } else {
+                val (raw, obj) = bounded
+                val nodeId = obj["nodeId"] as? String
+                if (
+                    nodeId == null || obj["status"] !is String ||
+                    !isValidNodeId(nodeId) ||
+                    file.name != "$nodeId.json"
+                ) {
+                    invalidEnvelopeFiles += file.name
+                    null
+                } else {
+                    Triple(file, raw, obj)
+                }
+            }
+        }
+        val traceId = expectedTraceId ?: parsed.firstNotNullOfOrNull { (_, _, envelope) ->
+            (envelope["traceId"] as? String)?.takeIf(TRACE_ID::matches)
+        }
+        val traceValidationActive = expectedTraceId != null ||
+                parsed.any { (_, _, envelope) -> envelope.containsKey("traceId") }
+        val observedNodeIds = parsed.map { (_, _, envelope) -> envelope["nodeId"] as String }
+        val observedNodeIdSet = observedNodeIds.toSet()
+        val duplicateNodeIds = observedNodeIds.groupingBy { it }.eachCount()
+            .filterValues { it > 1 }.keys.sorted()
+        val expectedNodeIdSet = expectedNodeIds.toSet()
+        val unexpectedNodeIds = if (expectedNodeIds.isEmpty()) {
+            emptyList()
+        } else {
+            (observedNodeIdSet - expectedNodeIdSet).sorted()
+        }
+        val unknownStatusNodeIds = parsed.mapNotNull { (_, _, envelope) ->
+            val status = envelope["status"] as String
+            (envelope["nodeId"] as String).takeIf { status !in VALID_NODE_STATUSES }
+        }.distinct().sorted()
+        val missingTraceNodeIds = if (!traceValidationActive) {
+            emptyList()
+        } else parsed.mapNotNull { (_, _, envelope) ->
+            val nodeId = envelope["nodeId"] as String
+            val envelopeTraceId = envelope["traceId"]
+            nodeId.takeIf {
+                !envelope.containsKey("traceId") ||
+                        (envelopeTraceId is String && envelopeTraceId.isBlank())
+            }
+        }.sorted()
+        val invalidTraceNodeIds = if (!traceValidationActive) {
+            emptyList()
+        } else parsed.mapNotNull { (_, _, envelope) ->
+            val nodeId = envelope["nodeId"] as String
+            val envelopeTraceId = envelope["traceId"]
+            nodeId.takeIf {
+                envelope.containsKey("traceId") &&
+                        (envelopeTraceId !is String ||
+                                (envelopeTraceId.isNotBlank() && !TRACE_ID.matches(envelopeTraceId)))
+            }
+        }.sorted()
+        val mismatchedTraceNodeIds = if (!traceValidationActive) {
+            emptyList()
+        } else parsed.mapNotNull { (_, _, envelope) ->
+            val nodeId = envelope["nodeId"] as String
+            val envelopeTraceId = envelope["traceId"] as? String
+            nodeId.takeIf {
+                !envelopeTraceId.isNullOrBlank() &&
+                        TRACE_ID.matches(envelopeTraceId) && envelopeTraceId != traceId
+            }
+        }.sorted()
+        val integrity = ReportIntegrity(
+            expectedNodeIds = expectedNodeIds,
+            observedNodeIds = observedNodeIds,
+            missingNodeIds = expectedNodeIds.filterNot(observedNodeIdSet::contains),
+            invalidEnvelopeFiles = invalidEnvelopeFiles.sorted(),
+            duplicateNodeIds = duplicateNodeIds,
+            unexpectedNodeIds = unexpectedNodeIds,
+            unknownStatusNodeIds = unknownStatusNodeIds,
+            missingTraceNodeIds = missingTraceNodeIds,
+            invalidTraceNodeIds = invalidTraceNodeIds,
+            mismatchedTraceNodeIds = mismatchedTraceNodeIds,
+            emptyEvidence = envelopeFiles.isEmpty(),
+            envelopeFileCountExceeded = envelopeScan.countExceeded,
+            aggregateEnvelopeBytesExceeded = aggregateEnvelopeBytesExceeded,
+            executionFailure = executionFailure,
+        )
+
+        val statusCounts = mutableMapOf<String, Int>()
+        for ((_, _, envelope) in parsed) {
+            val status = envelope["status"] as String
+            statusCounts.merge(status, 1) { a, b -> a + b }
+        }
+        val overallStatus = when {
+            integrity.errored || statusCounts.getOrDefault("errored", 0) > 0 -> "errored"
+            statusCounts.getOrDefault("failed", 0) > 0 -> "failed"
+            statusCounts.getOrDefault("skipped", 0) > 0 -> "errored"
+            else -> "passed"
         }
 
         // 1. summary.json — machine-readable concatenation.
         val summarySb = StringBuilder()
         summarySb.append('{')
-        summarySb.append("\"runId\":\"").append(runDir.name).append("\",")
+        summarySb.append("\"runId\":").append(jsonString(runDir.name)).append(',')
+        summarySb.append("\"status\":").append(jsonString(overallStatus)).append(',')
         if (traceId != null) {
-            summarySb.append("\"traceId\":\"").append(traceId).append("\",")
+            summarySb.append("\"traceId\":").append(jsonString(traceId)).append(',')
         }
+        summarySb.append("\"execution\":{")
+        summarySb.append("\"complete\":").append(integrity.complete).append(',')
+        summarySb.append("\"expectedNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.expectedNodeIds)
+        summarySb.append(",\"observedNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.observedNodeIds)
+        summarySb.append(",\"missingNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.missingNodeIds)
+        summarySb.append(",\"invalidEnvelopeFiles\":")
+        appendJsonStringArray(summarySb, integrity.invalidEnvelopeFiles)
+        summarySb.append(",\"duplicateNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.duplicateNodeIds)
+        summarySb.append(",\"unexpectedNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.unexpectedNodeIds)
+        summarySb.append(",\"unknownStatusNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.unknownStatusNodeIds)
+        summarySb.append(",\"missingTraceNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.missingTraceNodeIds)
+        summarySb.append(",\"invalidTraceNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.invalidTraceNodeIds)
+        summarySb.append(",\"mismatchedTraceNodeIds\":")
+        appendJsonStringArray(summarySb, integrity.mismatchedTraceNodeIds)
+        summarySb.append(",\"envelopeFileCountExceeded\":")
+            .append(integrity.envelopeFileCountExceeded)
+        summarySb.append(",\"aggregateEnvelopeBytesExceeded\":")
+            .append(integrity.aggregateEnvelopeBytesExceeded)
+        integrity.executionFailure?.let { failure ->
+            summarySb.append(",\"failure\":{")
+            summarySb.append("\"type\":").append(jsonString(failure.javaClass.name)).append(',')
+            summarySb.append("\"message\":").append(
+                jsonString((failure.message ?: "").take(MAX_FAILURE_MESSAGE_CHARS))
+            )
+            summarySb.append('}')
+        }
+        summarySb.append("},")
         summarySb.append("\"nodes\":[")
-        envelopeFiles.forEachIndexed { i, f ->
+        parsed.forEachIndexed { i, (_, raw, _) ->
             if (i > 0) summarySb.append(',')
-            summarySb.append(f.readText().trim())
+            summarySb.append(raw.trim())
         }
         summarySb.append("]}")
         File(runDir, "summary.json").writeText(summarySb.toString())
 
         // 2. report.md — human-friendly per-run report.
-        val parsed = envelopeFiles.mapNotNull { f ->
-            val raw = f.readText()
-            val obj = try { MiniJson.parse(raw) as? Map<*, *> } catch (e: Exception) { null }
-            obj?.let { f to it }
-        }
-        val report = renderReport(runDir.name, traceId, parsed).trimEnd() + "\n"
+        val report = renderReport(
+            runId = runDir.name,
+            traceId = traceId,
+            envelopes = parsed.map { (file, _, envelope) -> file to envelope },
+            integrity = integrity,
+            overallStatus = overallStatus,
+            statusCounts = statusCounts,
+        ).trimEnd() + "\n"
         File(runDir, "report.md").writeText(report)
-        return true
+        return Outcome(
+            written = true,
+            status = overallStatus,
+            complete = integrity.complete,
+        )
     }
 
     private fun renderReport(
         runId: String,
         traceId: String?,
         envelopes: List<Pair<File, Map<*, *>>>,
+        integrity: ReportIntegrity,
+        overallStatus: String,
+        statusCounts: Map<String, Int>,
     ): String {
         val sb = StringBuilder()
 
         // Roll-up counts so the report header tells the story at a glance.
-        val statusCounts = mutableMapOf<String, Int>()
-        for ((_, env) in envelopes) {
-            val s = (env["status"] as? String) ?: "unknown"
-            statusCounts.merge(s, 1) { a, b -> a + b }
-        }
         val total = envelopes.size
         val passed = statusCounts.getOrDefault("passed", 0)
         val failed = statusCounts.getOrDefault("failed", 0)
         val errored = statusCounts.getOrDefault("errored", 0)
         val skipped = statusCounts.getOrDefault("skipped", 0)
-        val overall = when {
-            errored > 0 -> "ERRORED"
-            failed > 0 -> "FAILED"
-            else -> "PASSED"
-        }
 
         sb.append("# Validation report — ").append(runId).append("\n\n")
         if (traceId != null) {
             sb.append("**Trace ID**: `").append(traceId).append("`\n\n")
         }
-        sb.append("**Overall**: ").append(overall).append("\n\n")
+        sb.append("**Overall**: ").append(overallStatus.uppercase()).append("\n\n")
+        if (integrity.expectedNodeIds.isNotEmpty()) {
+            val expectedObserved = integrity.expectedNodeIds.count(integrity.observedNodeIds.toSet()::contains)
+            sb.append("**Plan evidence**: ").append(expectedObserved)
+                .append('/').append(integrity.expectedNodeIds.size)
+                .append(" expected node envelopes observed\n\n")
+        }
+        if (integrity.missingNodeIds.isNotEmpty()) {
+            sb.append("**Missing node envelopes**: ")
+                .append(integrity.missingNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        integrity.executionFailure?.let { failure ->
+            sb.append("**Execution error**: `").append(failure.javaClass.name).append('`')
+            failure.message?.take(MAX_FAILURE_MESSAGE_CHARS)?.takeIf { it.isNotBlank() }?.let {
+                sb.append(" — ").append(it.replace("\n", " ").replace("\r", " "))
+            }
+            sb.append("\n\n")
+        }
+        if (integrity.invalidEnvelopeFiles.isNotEmpty()) {
+            sb.append("**Invalid envelope files**: ")
+                .append(integrity.invalidEnvelopeFiles.joinToString(", ") { "`envelope/$it`" })
+                .append("\n\n")
+        }
+        if (integrity.duplicateNodeIds.isNotEmpty()) {
+            sb.append("**Duplicate node envelopes**: ")
+                .append(integrity.duplicateNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.unexpectedNodeIds.isNotEmpty()) {
+            sb.append("**Unexpected node envelopes**: ")
+                .append(integrity.unexpectedNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.unknownStatusNodeIds.isNotEmpty()) {
+            sb.append("**Unknown node statuses**: ")
+                .append(integrity.unknownStatusNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.missingTraceNodeIds.isNotEmpty()) {
+            sb.append("**Missing node trace IDs**: ")
+                .append(integrity.missingTraceNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.invalidTraceNodeIds.isNotEmpty()) {
+            sb.append("**Invalid node trace IDs**: ")
+                .append(integrity.invalidTraceNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.mismatchedTraceNodeIds.isNotEmpty()) {
+            sb.append("**Mismatched node trace IDs**: ")
+                .append(integrity.mismatchedTraceNodeIds.joinToString(", ") { "`$it`" })
+                .append("\n\n")
+        }
+        if (integrity.emptyEvidence) {
+            sb.append("**Execution evidence**: no node envelopes were produced\n\n")
+        }
+        if (integrity.envelopeFileCountExceeded) {
+            sb.append("**Envelope file count**: exceeded the bounded scan limit; ")
+                .append("only bounded partial evidence was retained\n\n")
+        }
+        if (integrity.aggregateEnvelopeBytesExceeded) {
+            sb.append("**Aggregate envelope bytes**: exceeded ")
+                .append(MAX_AGGREGATE_ENVELOPE_BYTES)
+                .append(" bytes; envelope parsing was skipped\n\n")
+        }
         sb.append("**Nodes**: ").append(total)
         sb.append(" (passed=").append(passed)
         sb.append(", failed=").append(failed)
@@ -349,4 +619,74 @@ internal object RunReportWriter {
         "skipped" -> "_skipped_"
         else -> status ?: "?"
     }
+
+    private fun appendJsonStringArray(sb: StringBuilder, values: List<String>) {
+        sb.append('[')
+        values.forEachIndexed { index, value ->
+            if (index > 0) sb.append(',')
+            sb.append(jsonString(value))
+        }
+        sb.append(']')
+    }
+
+    internal data class EnvelopeFileScan(
+        val files: List<File>,
+        val countExceeded: Boolean,
+    )
+
+    internal fun envelopeFileLimit(expectedNodeCount: Int): Int {
+        require(expectedNodeCount >= 0) { "expected node count must be non-negative" }
+        return if (expectedNodeCount == 0) {
+            MAX_ENVELOPE_FILES
+        } else {
+            expectedNodeCount.coerceAtMost(MAX_ENVELOPE_FILES)
+        }
+    }
+
+    internal fun scanEnvelopeFiles(envelopeDir: File, maxFiles: Int): EnvelopeFileScan {
+        require(maxFiles >= 0) { "envelope file limit must be non-negative" }
+        if (!envelopeDir.isDirectory) return EnvelopeFileScan(emptyList(), false)
+
+        val retained = ArrayList<File>(maxFiles.coerceAtMost(1_024))
+        var countExceeded = false
+        Files.newDirectoryStream(envelopeDir.toPath()).use { entries ->
+            for (entry in entries) {
+                if (!entry.fileName.toString().endsWith(".json")) continue
+                if (retained.size == maxFiles) {
+                    countExceeded = true
+                    break
+                }
+                retained += entry.toFile()
+            }
+        }
+        retained.sortBy { it.name }
+        return EnvelopeFileScan(retained, countExceeded)
+    }
+
+    private fun jsonString(value: String): String = buildString(value.length + 2) {
+        append('"')
+        for (ch in value) {
+            when (ch) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\b' -> append("\\b")
+                '\u000c' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (ch.code < 0x20) {
+                    append("\\u").append(ch.code.toString(16).padStart(4, '0'))
+                } else {
+                    append(ch)
+                }
+            }
+        }
+        append('"')
+    }
+
+    private const val MAX_FAILURE_MESSAGE_CHARS = 4_096
+    internal const val MAX_AGGREGATE_ENVELOPE_BYTES = 64L * 1024 * 1024
+    internal const val MAX_ENVELOPE_FILES = 10_000
+    private val VALID_NODE_STATUSES = setOf("passed", "failed", "errored", "skipped")
+    private val TRACE_ID = Regex("^[0-9a-f]{32}$")
 }

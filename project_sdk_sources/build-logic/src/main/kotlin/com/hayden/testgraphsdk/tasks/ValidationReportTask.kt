@@ -44,7 +44,7 @@ abstract class ValidationReportTask : DefaultTask() {
             return
         }
         for (runDir in runDirs) {
-            if (RunReportWriter.writeRunReport(runDir)) {
+            if (RunReportWriter.writeRunReport(runDir).written) {
                 logger.lifecycle(
                     "rewrote ${File(runDir, "summary.json").absolutePath} + " +
                             "${File(runDir, "report.md").absolutePath}"

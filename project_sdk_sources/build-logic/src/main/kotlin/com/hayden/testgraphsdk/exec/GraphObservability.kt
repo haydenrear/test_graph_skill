@@ -1,6 +1,5 @@
 package com.hayden.testgraphsdk.exec
 
-import com.hayden.testgraphsdk.MiniJson
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
@@ -159,6 +158,7 @@ class GraphObservability private constructor(
 
     companion object {
         private const val CARRIER_FILE = "trace-context.json"
+        internal const val TRACE_CARRIER_MAX_UTF8_BYTES = 4 * 1024
         private const val FLUSH_TIMEOUT_MILLIS = 5_000L
         private val TRACE_ID = Regex("^[0-9a-f]{32}$")
         private val setter = TextMapSetter<MutableMap<String, String>> { carrier, key, value ->
@@ -169,10 +169,20 @@ class GraphObservability private constructor(
             override fun get(carrier: Map<String, String>?, key: String): String? = carrier?.get(key)
         }
 
-        fun open(reportDir: File, graphName: String): GraphObservability {
+        fun open(
+            reportDir: File,
+            graphName: String,
+            requireExistingCarrier: Boolean = false,
+        ): GraphObservability {
             val sdk = TestGraphOpenTelemetry.sdk
             val carrierFile = File(reportDir, CARRIER_FILE)
-            val originalCarrier = readCarrier(carrierFile)
+            val originalCarrier = when {
+                carrierFile.exists() -> readCarrier(carrierFile)
+                requireExistingCarrier -> throw IllegalArgumentException(
+                    "resume requires an existing trace carrier at ${carrierFile.absolutePath}"
+                )
+                else -> null
+            }
             val context = if (originalCarrier == null) {
                 createGraphContext(sdk, graphName, carrierFile)
             } else {
@@ -183,7 +193,6 @@ class GraphObservability private constructor(
                 "OpenTelemetry did not provide a valid graph trace ID"
             }
             val carrier = originalCarrier ?: readCarrier(carrierFile)
-                ?: error("graph trace carrier was not persisted")
 
             if (originalCarrier != null) {
                 shortGraphStart(sdk, graphName, context)
@@ -240,17 +249,31 @@ class GraphObservability private constructor(
             }
         }
 
-        private fun readCarrier(file: File): Map<String, String>? {
-            if (!file.isFile) return null
+        private fun readCarrier(file: File): Map<String, String> {
             val parsed = try {
-                MiniJson.parse(file.readText()) as? Map<*, *>
-            } catch (_: Exception) {
-                null
-            } ?: return null
-            val carrier = parsed.entries.associate { (key, value) ->
-                key.toString() to value.toString()
+                readBoundedJsonObject(
+                    file,
+                    "graph trace carrier",
+                    maxUtf8Bytes = TRACE_CARRIER_MAX_UTF8_BYTES,
+                ).second
+            } catch (e: Exception) {
+                throw IllegalArgumentException("invalid graph trace carrier: ${e.message}", e)
             }
-            return carrier.takeIf { "traceparent" in it }
+            val carrier = linkedMapOf<String, String>()
+            for ((key, value) in parsed) {
+                if (value !is String) {
+                    throw IllegalArgumentException(
+                        "invalid graph trace carrier: '$key' must have a string value"
+                    )
+                }
+                carrier[key] = value
+            }
+            if (carrier["traceparent"].isNullOrBlank()) {
+                throw IllegalArgumentException(
+                    "invalid graph trace carrier: missing string traceparent"
+                )
+            }
+            return carrier
         }
 
         private fun writeCarrier(file: File, carrier: Map<String, String>) {

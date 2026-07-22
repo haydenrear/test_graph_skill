@@ -21,6 +21,44 @@ internal object RunIds {
     fun next(): String = fmt.format(Instant.now())
 }
 
+internal data class RunTerminalOutcome(
+    val failure: Throwable?,
+) {
+    val observabilityStatus: String
+        get() = if (failure == null) "passed" else "failed"
+}
+
+internal fun resolveRunTerminalOutcome(
+    executionFailure: Throwable?,
+    reportOutcome: RunReportWriter.Outcome?,
+    reportWriteFailure: Throwable?,
+): RunTerminalOutcome {
+    if (executionFailure != null) {
+        if (reportWriteFailure != null && reportWriteFailure !== executionFailure) {
+            executionFailure.addSuppressed(reportWriteFailure)
+        }
+        return RunTerminalOutcome(executionFailure)
+    }
+    if (reportWriteFailure != null) return RunTerminalOutcome(reportWriteFailure)
+    if (reportOutcome?.passed == true) return RunTerminalOutcome(null)
+
+    val reportStatus = reportOutcome?.status ?: "unwritten"
+    return RunTerminalOutcome(
+        IllegalStateException(
+            "test graph report did not pass: status=$reportStatus " +
+                    "complete=${reportOutcome?.complete ?: false}"
+        )
+    )
+}
+
+internal fun requireExecutablePlanSize(planSize: Int) {
+    require(planSize in 1..RunReportWriter.MAX_ENVELOPE_FILES) {
+        "test graph plan must contain 1..${RunReportWriter.MAX_ENVELOPE_FILES} nodes; found " +
+                planSize + ". The absolute limit is " +
+                RunReportWriter.MAX_ENVELOPE_FILES
+    }
+}
+
 /**
  * Executes one test graph. Registered by the extension as a task named
  * after the graph (so `testGraph("smoke")` ⇒ `./gradlew smoke`).
@@ -76,7 +114,9 @@ abstract class RunTestGraphTask : DefaultTask() {
         val projDir = projectDirectory.get().asFile
         val tools = Toolchain.resolve(project)
         val plan = GraphAssembler.plan(graphSpec, sourcesDirsProvider(), projDir, tools)
+        requireExecutablePlanSize(plan.size)
         val resume = resumeRequest()
+        val expectedNodeIds = plan.map { it.id }
         val runId = resume?.buildDir?.name ?: RunIds.next()
         val reportDir = if (resume == null) {
             reportRoot.dir(runId).get()
@@ -84,7 +124,11 @@ abstract class RunTestGraphTask : DefaultTask() {
             project.layout.dir(project.provider { resume.buildDir }).get()
         }
         reportDir.asFile.mkdirs()
-        val observability = GraphObservability.open(reportDir.asFile, graphSpec.name)
+        val observability = GraphObservability.open(
+            reportDir.asFile,
+            graphSpec.name,
+            requireExistingCarrier = resume != null,
+        )
 
         logger.lifecycle(
             "testGraph '${graphSpec.name}' run=$runId steps=${plan.size} traceId=${observability.traceId}"
@@ -111,17 +155,31 @@ abstract class RunTestGraphTask : DefaultTask() {
         // report when one `validationReport` finalizer was shared across
         // multiple graph tasks (smoke, sponsored, ...) inside a single
         // `validationRunAll` invocation.
+        var reportOutcome: RunReportWriter.Outcome? = null
+        var reportWriteFailure: Throwable? = null
         try {
-            if (RunReportWriter.writeRunReport(reportDir.asFile)) {
+            reportOutcome = RunReportWriter.writeRunReport(
+                    runDir = reportDir.asFile,
+                    expectedNodeIds = expectedNodeIds,
+                    executionFailure = executionFailure,
+                    expectedTraceId = observability.traceId,
+                )
+            if (reportOutcome.written) {
                 logger.lifecycle(
                     "wrote ${File(reportDir.asFile, "summary.json").absolutePath} + " +
                     "${File(reportDir.asFile, "report.md").absolutePath}"
                 )
             }
-        } finally {
-            observability.finish(if (executionFailure == null) "passed" else "failed")
+        } catch (t: Throwable) {
+            reportWriteFailure = t
         }
-        executionFailure?.let { throw it }
+        val terminalOutcome = resolveRunTerminalOutcome(
+            executionFailure = executionFailure,
+            reportOutcome = reportOutcome,
+            reportWriteFailure = reportWriteFailure,
+        )
+        observability.finish(terminalOutcome.observabilityStatus)
+        terminalOutcome.failure?.let { throw it }
 
         logger.lifecycle(
             "testGraph '${graphSpec.name}' done. traceId=${observability.traceId} " +
@@ -165,4 +223,5 @@ abstract class RunTestGraphTask : DefaultTask() {
             mode = mode,
         )
     }
+
 }

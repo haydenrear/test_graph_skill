@@ -13,7 +13,7 @@ emitted JSON; no YAML sidecar.
 
 | Field          | Type                                                                        | Required | Notes                                                          |
 | -------------- | --------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
-| `id`           | string (dotted)                                                             | yes      | Stable semantic identifier. Treat as public API.               |
+| `id`           | string                                                                        | yes      | Stable public identifier matching `[a-z0-9._-]{1,128}`.        |
 | `kind`         | `testbed` \| `fixture` \| `action` \| `assertion` \| `evidence` \| `report` | yes      | Exactly one.                                                   |
 | `runtime`      | `jbang` \| `uv`                                                             | yes      | Fixed by the SDK language (Java -> `jbang`, Python -> `uv`).   |
 | `dependsOn`    | list\<string\>                                                              | no       | Upstream node ids.                                             |
@@ -29,6 +29,8 @@ emitted JSON; no YAML sidecar.
 | `reports`      | object                                                                      | no       | See below.                                                     |
 
 The entry path is not in the spec — the plugin knows it (it's the file it invoked).
+Resolved graph plans must contain 1–10,000 nodes; execution and reporting reject
+plans outside that bound.
 
 ### NodeSpec API — Java
 
@@ -330,6 +332,7 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 ```json
 {
   "nodeId": "login.smoke",
+  "traceId": "0123456789abcdef0123456789abcdef",
   "status": "passed",
   "startedAt": "2026-04-21T22:06:57.043351Z",
   "endedAt":   "2026-04-21T22:06:57.216374Z",
@@ -347,6 +350,10 @@ What each node writes to `build/validation-reports/<runId>/envelope/<nodeId>.jso
 
 - `status`: `passed | failed | errored | skipped`.
 - `published` is this node's contribution to the downstream `Context[]`.
+- The canonical filename must be `<nodeId>.json`, with the basename exactly
+  matching the embedded `nodeId`. Active-run envelopes must also carry the one
+  persisted run trace ID; missing, invalid, or mismatched identities make the
+  run report `ERRORED`.
 
 ## Context[] — the data wire between nodes
 
@@ -356,6 +363,10 @@ One CLI arg, two encodings:
 
 - **Inline** (≤ 8 KB): `--context={"items":[{"nodeId":"user.seeded","data":{"userId":"u-1a2b"}}, ...]}`
 - **File ref**: `--context=@<abs-path>` — every attempted node has its exact input context saved at `<reportDir>/context/<node-id>.input.json`; large runtime args may also spill to `<reportDir>/context/step-NNN.json`.
+
+Executor-ingested context, child-result, and envelope JSON is strict UTF-8 and
+limited to 16 MiB per document. Context item node IDs use the same portable
+node-ID grammar as `NodeSpec.id`.
 
 ### Shape
 
@@ -426,6 +437,7 @@ Each run writes under `build/validation-reports/<runId>/`:
 
 ```
 build/validation-reports/<runId>/
+  trace-context.json          # W3C carrier for the whole run
   envelope/<nodeId>.json     # canonical per-node envelope
   context/<nodeId>.input.json # exact input Context[] for that node attempt
   context/step-NNN.json      # optional large runtime --context spill file
@@ -434,6 +446,12 @@ build/validation-reports/<runId>/
 ```
 
 `summary.json` is the machine-readable handoff for CI, dashboards, agents.
+The trace carrier is strict UTF-8 and limited to 4 KiB; resume requires the
+existing valid carrier rather than minting a replacement trace. Reporting uses
+a streaming directory scan, retains at most 10,000 envelope files, accepts at
+most 16 MiB per envelope and 64 MiB in aggregate, and fails closed when any
+bound or identity check is exceeded. Manual regeneration permits wholly legacy
+evidence with no `traceId` fields, but never blank, mixed, or inconsistent traces.
 
 ## Java SDK (`com.hayden.testgraphsdk.sdk`)
 

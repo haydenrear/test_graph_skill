@@ -2,10 +2,12 @@ package com.hayden.testgraphsdk.exec
 
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import com.hayden.testgraphsdk.ValidationRuntime
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class GraphObservabilityTest {
@@ -16,7 +18,11 @@ class GraphObservabilityTest {
         val reportDir = Files.createTempDirectory("test-graph-observability").toFile()
 
         val initial = GraphObservability.open(reportDir, "observabilitySmoke")
-        val replay = GraphObservability.open(reportDir, "observabilitySmoke")
+        val replay = GraphObservability.open(
+            reportDir,
+            "observabilitySmoke",
+            requireExistingCarrier = true,
+        )
 
         assertTrue(initial.traceId.matches(Regex("^[0-9a-f]{32}$")))
         assertEquals(initial.traceId, replay.traceId)
@@ -43,6 +49,57 @@ class GraphObservabilityTest {
 
         val elapsed = measureTimeMillis { initial.finish("passed", timeoutMillis = 10) }
         assertTrue(elapsed < 1_000, "terminal flush must remain bounded")
+    }
+
+    @Test
+    fun resumeRequiresAnExistingTraceCarrier() {
+        disableExportForUnitTest()
+        val reportDir = Files.createTempDirectory("test-graph-missing-carrier").toFile()
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            GraphObservability.open(
+                reportDir,
+                "resumeMissingCarrier",
+                requireExistingCarrier = true,
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("resume requires an existing trace carrier"))
+        assertTrue(!reportDir.resolve("trace-context.json").exists())
+    }
+
+    @Test
+    fun invalidExistingTraceCarrierFailsClosedWithoutReplacement() {
+        disableExportForUnitTest()
+        val reportDir = Files.createTempDirectory("test-graph-invalid-carrier").toFile()
+        val carrier = reportDir.resolve("trace-context.json")
+        carrier.writeText("{not-json")
+
+        assertFailsWith<IllegalArgumentException> {
+            GraphObservability.open(reportDir, "invalidCarrier")
+        }
+
+        assertEquals("{not-json", carrier.readText())
+    }
+
+    @Test
+    fun oversizedExistingTraceCarrierIsRejectedBeforeReading() {
+        disableExportForUnitTest()
+        val reportDir = Files.createTempDirectory("test-graph-oversized-carrier").toFile()
+        val carrier = reportDir.resolve("trace-context.json")
+        RandomAccessFile(carrier, "rw").use {
+            it.setLength(GraphObservability.TRACE_CARRIER_MAX_UTF8_BYTES.toLong() + 1)
+        }
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            GraphObservability.open(reportDir, "oversizedCarrier")
+        }
+
+        assertTrue(
+            failure.message.orEmpty().contains(
+                "exceeds ${GraphObservability.TRACE_CARRIER_MAX_UTF8_BYTES} UTF-8 bytes"
+            )
+        )
     }
 
     private fun disableExportForUnitTest() {

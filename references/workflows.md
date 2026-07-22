@@ -7,7 +7,8 @@ SDK surface.
 ## Mental Model
 
 - A node is one small unit of validation work. It declares its own `NodeSpec`
-  in code and returns a structured `NodeResult`.
+  in code and returns a structured `NodeResult`. Node IDs match the portable
+  lowercase grammar `[a-z0-9._-]{1,128}`.
 - The script is the source of truth. No YAML sidecar. Discovery invokes each
   script with `--describe-out=<tmp>`.
 - A test graph is a named composition declared in a scaffolded project's
@@ -35,6 +36,8 @@ SDK surface.
 - Data flows downstream through `Context[]`. Publish with
   `NodeResult.publish(key, value)` and read with `ctx.get(upstreamId, key)`.
 - Reports are written under `<test_graph>/build/validation-reports/<runId>/`.
+- A resolved graph contains 1–10,000 nodes; larger or empty plans fail before
+  node execution.
 
 ## Use Scripts First
 
@@ -266,6 +269,8 @@ The node must have `rerun=true` in its script metadata, and its saved
 `context/<node-id>.input.json` must include every declared dependency. The
 executor skips earlier plan steps, runs the selected node, continues through the
 remaining graph plan, and rewrites the report in the same build directory.
+Resume also requires the run's existing valid `trace-context.json`; it never
+creates a replacement trace inside an existing build.
 
 When a rerunnable node fails, Gradle output and `report.md` include rerun guidance
 with both this resume-graph command and the run-only command below.
@@ -357,6 +362,7 @@ Every run writes under the scaffolded project's build directory:
 
 ```text
 <test_graph>/build/validation-reports/<runId>/
+  trace-context.json
   envelope/
     <node-id>.json
   node-logs/
@@ -371,6 +377,12 @@ Every run writes under the scaffolded project's build directory:
 `<runId>` is timestamp-like, for example `20260428-184103`. Multiple runs
 accumulate until `clean.py` or Gradle `clean` removes them. CI should upload
 `build/validation-reports/` as a whole.
+
+Treat report identity checks as validation evidence: each canonical envelope
+filename must match its embedded node ID, and all traced envelopes in a run must
+share the persisted run trace. Context/result/envelope JSON is limited to 16
+MiB per document; the trace carrier is limited to 4 KiB. Report enumeration is
+streamed and capped at 10,000 envelopes.
 
 ## Dependency Nodes
 
@@ -465,12 +477,15 @@ Before finalizing work that touches `sources/` or `build.gradle.kts`:
 
 - Run `<skill>/scripts/discover.py`.
 - Run `<skill>/scripts/discover.py <graph>` for each affected graph.
-- Confirm node ids are dotted, stable, and intentional.
+- Confirm node ids match `[a-z0-9._-]{1,128}`, are stable, and are intentional.
+- Confirm the resolved graph contains 1–10,000 nodes.
 - Confirm every node has exactly one kind and one runtime.
 - Confirm all dependencies are declared via script metadata or DSL overlays.
 - Confirm downstream data is published through `NodeResult.publish(...)`.
 - Run `<skill>/scripts/run.py <graph>` or `<skill>/scripts/run.py --all`.
 - Check `build/validation-reports/<runId>/summary.json` and `report.md`.
+- Confirm the report is not flagging missing, invalid, or mismatched node/trace
+  identities.
 
 ## Anti-Patterns
 

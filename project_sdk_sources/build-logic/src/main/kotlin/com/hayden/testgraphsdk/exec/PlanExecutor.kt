@@ -352,7 +352,7 @@ class PlanExecutor(
 
     private fun readContextItem(nodeId: String): ContextItem {
         val envelope = File(reportDir.asFile, "envelope/$nodeId.json")
-        val data = if (envelope.isFile) ContextSerde.extractPublished(envelope.readText())
+        val data = if (envelope.isFile) ContextSerde.extractPublished(envelope)
                    else emptyMap()
         return ContextItem(nodeId, data)
     }
@@ -424,14 +424,28 @@ class PlanExecutor(
             )
         }
 
-        val raw = resultOut.readText()
-        val parsed = try { MiniJson.parse(raw) } catch (e: Exception) { null }
-        if (parsed !is Map<*, *>) {
+        val boundedResult = try {
+            readBoundedJsonObject(resultOut, "--result-out for node '${spec.id}'")
+        } catch (e: Exception) {
             return synthesized(
                 spec, "errored",
-                "node wrote malformed --result-out (not a JSON object); see capturedStdoutLog",
+                "node wrote invalid --result-out: " +
+                        "${e.message?.take(RESULT_ERROR_MESSAGE_CHARS) ?: e.javaClass.simpleName}; " +
+                        "see capturedStdoutLog",
                 stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
-                malformedRaw = raw,
+                malformedRaw = readMalformedResultPreview(resultOut),
+                rerunGuidance = rerunGuidance,
+            )
+        }
+        val (raw, parsed) = boundedResult
+        val resultNodeId = parsed["nodeId"] as? String
+        if (resultNodeId != spec.id) {
+            return synthesized(
+                spec, "errored",
+                "node wrote --result-out with nodeId=${resultNodeIdPreview(resultNodeId)}; " +
+                        "expected ${spec.id}; see capturedStdoutLog",
+                stdoutRel, inputContextRel, exitCode, executorStartedAt, executorEndedAt,
+                malformedRaw = readMalformedResultPreview(resultOut),
                 rerunGuidance = rerunGuidance,
             )
         }
@@ -507,7 +521,7 @@ class PlanExecutor(
         sb.appendRerunGuidance(rerunGuidance)
         if (malformedRaw != null) {
             sb.append(",\"malformedResultOutPreview\":")
-            sb.append(jsonString(malformedRaw.take(MALFORMED_PREVIEW_BYTES)))
+            sb.append(jsonString(malformedRaw.take(MALFORMED_PREVIEW_UTF8_BYTES)))
         }
         sb.append("}\n")
         return EnvelopeOutcome(sb.toString(), status, reason)
@@ -521,6 +535,20 @@ class PlanExecutor(
         } catch (e: IllegalArgumentException) {
             target.absolutePath
         }
+
+    private fun readMalformedResultPreview(resultOut: File): String? = try {
+        resultOut.inputStream().use { input ->
+            input.readNBytes(MALFORMED_PREVIEW_UTF8_BYTES).toString(Charsets.UTF_8)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun resultNodeIdPreview(nodeId: String?): String {
+        if (nodeId == null) return "<missing>"
+        val suffix = if (nodeId.length > RESULT_NODE_ID_PREVIEW_CHARS) "…" else ""
+        return jsonString(nodeId.take(RESULT_NODE_ID_PREVIEW_CHARS)) + suffix
+    }
 
     private fun buildRerunGuidance(
         spec: ValidationNodeSpec,
@@ -720,6 +748,8 @@ class PlanExecutor(
 
     companion object {
         private val VALID_STATUSES = setOf("passed", "failed", "errored", "skipped")
-        private const val MALFORMED_PREVIEW_BYTES = 4096
+        private const val MALFORMED_PREVIEW_UTF8_BYTES = 4_096
+        private const val RESULT_ERROR_MESSAGE_CHARS = 512
+        private const val RESULT_NODE_ID_PREVIEW_CHARS = 256
     }
 }
