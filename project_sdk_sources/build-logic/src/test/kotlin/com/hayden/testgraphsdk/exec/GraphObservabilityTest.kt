@@ -14,17 +14,23 @@ import kotlin.test.assertTrue
 class GraphObservabilityTest {
 
     @Test
-    fun persistsOneW3cCarrierAndReusesItForReplay() {
-        disableExportForUnitTest()
+    fun unavailableColdCollectorBeforeFirstNodeRemainsFailOpen() {
+        pointExportersAtUnavailableCollector()
         val reportDir = Files.createTempDirectory("test-graph-observability").toFile()
 
+        val openStarted = System.nanoTime()
         val initial = GraphObservability.open(reportDir, "observabilitySmoke")
+        val openElapsedMillis = (System.nanoTime() - openStarted) / 1_000_000
         val replay = GraphObservability.open(
             reportDir,
             "observabilitySmoke",
             requireExistingCarrier = true,
         )
 
+        assertTrue(
+            openElapsedMillis < 2_000,
+            "graph-start telemetry must not wait for an unavailable cold collector",
+        )
         assertTrue(initial.traceId.matches(Regex("^[0-9a-f]{32}$")))
         assertEquals(initial.traceId, replay.traceId)
         assertEquals(initial.carrier, replay.carrier)
@@ -246,6 +252,14 @@ class GraphObservabilityTest {
         System.setProperty("otel.traces.exporter", "none")
         System.setProperty("otel.metrics.exporter", "none")
         System.setProperty("otel.logs.exporter", "none")
+    }
+
+    private fun pointExportersAtUnavailableCollector() {
+        System.setProperty("otel.traces.exporter", "otlp")
+        System.setProperty("otel.metrics.exporter", "otlp")
+        System.setProperty("otel.logs.exporter", "otlp")
+        System.setProperty("otel.exporter.otlp.protocol", "http/protobuf")
+        System.setProperty("otel.exporter.otlp.endpoint", "http://127.0.0.1:1")
     }
 
     private fun replaySnapshot(

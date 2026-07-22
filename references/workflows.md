@@ -156,6 +156,7 @@ validationGraph {
     sourcesDir("sources")
 
     testGraph("smoke") {
+        standardNode("monitoring.cluster.assert.ready")
         node("sources/user_seeded.py")
         node("sources/LoginSmoke.java")
             .dependsOn("user.seeded")
@@ -164,6 +165,33 @@ validationGraph {
     }
 }
 ```
+
+`standardNode("stable.dotted.id")` maps to the shipped
+`standard-nodes/stable_dotted_id.py` script. The scaffold keeps that catalog as
+a symlink into the installed skill, so consumers compose the contract without
+copying provider code. Standard nodes are indexed before `sourcesDir(...)`
+entries and therefore cannot be shadowed by a consumer script with the same id.
+
+The shipped monitoring prerequisite is composed from its terminal assertion:
+
+```kotlin
+testGraph("monitoringReadiness") {
+    standardNode("monitoring.cluster.assert.ready")
+}
+```
+
+That resolves exactly `monitoring.cluster.ensure` followed by
+`monitoring.cluster.assert.ready`. Ensure alone declares
+`environment:provision` and a `360s` timeout; assert-ready has no side effects
+and a `30s` timeout. They call the installed deploy-helm `monitoring` launcher
+by deterministic absolute path. The pair has no `environmentRepository`
+metadata because deploy-cdc's public monitoring CLI owns the complete
+lifecycle; a repository prelude here would be a second deployment authority.
+
+Coordinator graph-start telemetry happens before the first node. If monitoring
+is cold, this first signal may be unavailable and is allowed to be lost. Export
+and flush stay bounded and fail-open, the ensure node still launches, and the
+coordinator never attempts to provision monitoring itself.
 
 Every `testGraph("name")` registers a graph. The script metadata and DSL
 overlays are merged: collections are unioned, scalars are overridden by the DSL.
@@ -490,11 +518,13 @@ Concrete examples are in:
 ```text
 <repo>/test_graph/sdk -> <skill>/project_sdk_sources/sdk
 <repo>/test_graph/build-logic -> <skill>/project_sdk_sources/build-logic
+<repo>/test_graph/standard-nodes -> <skill>/project_sdk_sources/standard-nodes
 ```
 
-Do not edit those paths from inside a consumer scaffold. Real SDK or plugin
-changes belong in `project_sdk_sources/sdk/` and
-`project_sdk_sources/build-logic/` in this repo.
+Do not edit those paths from inside a consumer scaffold. Real SDK, plugin, or
+standard-node changes belong in `project_sdk_sources/sdk/`,
+`project_sdk_sources/build-logic/`, and
+`project_sdk_sources/standard-nodes/` in this repo.
 
 Use `scaffold.py --copy-sdk` only when symlinks are not viable. That creates a
 snapshot copy, so future upstream changes require re-scaffolding or manual sync.
@@ -507,8 +537,8 @@ Use:
 <skill>/scripts/github-action.py <repo-root>
 ```
 
-The generated workflow installs the skill, resolves `sdk/` and `build-logic/`,
-runs `discover.py`, runs `run.py --all` by default, and uploads
+The generated workflow installs the skill, resolves `sdk/`, `build-logic/`, and
+`standard-nodes/`, runs `discover.py`, runs `run.py --all` by default, and uploads
 `test_graph/build/validation-reports/`. Read
 [`github-actions.md`](github-actions.md) for options and symlink modes.
 
@@ -535,4 +565,4 @@ Before finalizing work that touches `sources/` or `build.gradle.kts`:
 - Node ids renamed without checking downstream references.
 - Plain stdout instead of structured `NodeResult`.
 - Copy-pasted infrastructure setup instead of shared dependency nodes.
-- Duplicating `sdk/` or `build-logic/` edits inside consumer scaffolds.
+- Duplicating `sdk/`, `build-logic/`, or `standard-nodes/` edits inside consumer scaffolds.

@@ -80,5 +80,23 @@ class TestGraphBuilder(private val project: Project, private val name: String) {
         return explicitNodes.getOrPut(f) { NodeOverlay(f) }
     }
 
+    /**
+     * Compose a centrally shipped node by its stable semantic id.
+     *
+     * Standard nodes are resolved from the scaffold's `standard-nodes/`
+     * symlink when the graph is planned. Consumers name the contract; they do
+     * not copy or address its provider-owned script path.
+     */
+    fun standardNode(id: String): NodeOverlay {
+        require(STANDARD_NODE_ID.matches(id)) {
+            "standard node id must be dotted (for example, 'monitoring.cluster.ensure'): '$id'"
+        }
+        return node("standard-nodes/${id.replace('.', '_')}.py")
+    }
+
     internal fun build(): TestGraphSpec = TestGraphSpec(name, explicitNodes.toMap())
+
+    private companion object {
+        val STANDARD_NODE_ID = Regex("[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+")
+    }
 }
