@@ -4,6 +4,7 @@ import com.hayden.testgraphsdk.GraphAssembler
 import com.hayden.testgraphsdk.TestGraphSpec
 import com.hayden.testgraphsdk.Toolchain
 import com.hayden.testgraphsdk.exec.ExecutorRegistry
+import com.hayden.testgraphsdk.exec.GraphObservability
 import com.hayden.testgraphsdk.exec.PlanExecutor
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
@@ -83,8 +84,11 @@ abstract class RunTestGraphTask : DefaultTask() {
             project.layout.dir(project.provider { resume.buildDir }).get()
         }
         reportDir.asFile.mkdirs()
+        val observability = GraphObservability.open(reportDir.asFile, graphSpec.name)
 
-        logger.lifecycle("testGraph '${graphSpec.name}' run=$runId steps=${plan.size}")
+        logger.lifecycle(
+            "testGraph '${graphSpec.name}' run=$runId steps=${plan.size} traceId=${observability.traceId}"
+        )
         for ((i, n) in plan.withIndex()) {
             logger.lifecycle(
                 "  plan[${i + 1}/${plan.size}] ${n.id}  [${n.kind.name.lowercase()}, ${n.runtime.name}]  ${n.runtime.entryFile}"
@@ -95,7 +99,7 @@ abstract class RunTestGraphTask : DefaultTask() {
         try {
             PlanExecutor(
                 ExecutorRegistry.defaults(tools),
-                projectDirectory.get(), reportDir, runId, logger, graphSpec.name,
+                projectDirectory.get(), reportDir, runId, logger, graphSpec.name, observability,
             ).run(plan, resume)
         } catch (t: Throwable) {
             executionFailure = t
@@ -107,15 +111,22 @@ abstract class RunTestGraphTask : DefaultTask() {
         // report when one `validationReport` finalizer was shared across
         // multiple graph tasks (smoke, sponsored, ...) inside a single
         // `validationRunAll` invocation.
-        if (RunReportWriter.writeRunReport(reportDir.asFile)) {
-            logger.lifecycle(
-                "wrote ${File(reportDir.asFile, "summary.json").absolutePath} + " +
-                "${File(reportDir.asFile, "report.md").absolutePath}"
-            )
+        try {
+            if (RunReportWriter.writeRunReport(reportDir.asFile)) {
+                logger.lifecycle(
+                    "wrote ${File(reportDir.asFile, "summary.json").absolutePath} + " +
+                    "${File(reportDir.asFile, "report.md").absolutePath}"
+                )
+            }
+        } finally {
+            observability.finish(if (executionFailure == null) "passed" else "failed")
         }
         executionFailure?.let { throw it }
 
-        logger.lifecycle("testGraph '${graphSpec.name}' done. reports: ${reportDir.asFile.absolutePath}")
+        logger.lifecycle(
+            "testGraph '${graphSpec.name}' done. traceId=${observability.traceId} " +
+                    "reports: ${reportDir.asFile.absolutePath}"
+        )
     }
 
     private fun resumeRequest(): PlanExecutor.ResumeFromBuild? {

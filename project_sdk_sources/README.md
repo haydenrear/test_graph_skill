@@ -30,6 +30,7 @@ gradlew, gradle/      Gradle wrapper (standalone; no global gradle needed)
 build-logic/          Gradle plugin + Kotlin DSL (ValidationGraphPlugin)
 sdk/java/             Java SDK: Node.run, NodeSpec, NodeResult, ContextItem
 sdk/python/           Python SDK: @node, NodeSpec, NodeResult, ContextItem
+standard-nodes/       centrally shipped nodes composed with `standardNode("dotted.id")`
 sources/              node scripts (self-describing; .java = jbang, .py = uv)
 examples/             supplementary example docs
 ```
@@ -45,6 +46,33 @@ Use the upstream skill's scripts from inside this directory:
 <skill>/scripts/run.py smoke                # execute + aggregate
 ```
 
+Compose a shipped node by semantic id instead of copying its script:
+
+```kotlin
+testGraph("monitoringReadiness") {
+    standardNode("monitoring.cluster.assert.ready")
+}
+```
+
+The monitoring assertion pulls `monitoring.cluster.ensure` as its sole
+transitive dependency. Ensure is the only mutating node
+(`environment:provision`, timeout `360s`); assert-ready is a pure, fresh
+`monitoring status --json --require-ready` observation (timeout `30s`). Both
+invoke the installed deploy-helm `monitoring` launcher through a deterministic
+Skill Manager path and preserve the established monitoring endpoint,
+`KUBECONFIG`, `KUBECONTEXT`, and reuse outputs.
+
+This pair intentionally has no `environmentRepository` metadata. The public
+deploy-cdc monitoring CLI is the single lifecycle authority, so Test Graph must
+not run a Git/OpenTofu environment prelude or reproduce Helm, k3d, storage, or
+readiness logic.
+
+Graph coordinator telemetry is emitted before the first node. On a genuinely
+cold monitoring start, that initial export can therefore be unavailable and
+lost; telemetry remains bounded and fail-open so the ensure node still runs.
+The coordinator never deploys monitoring or provides a fallback deployment
+path.
+
 ## GitHub Actions
 
 From your repo root, scaffold a CI workflow with the upstream skill:
@@ -53,8 +81,8 @@ From your repo root, scaffold a CI workflow with the upstream skill:
 <skill>/scripts/github-action.py
 ```
 
-The workflow installs the test-graph skill on the runner so the `sdk/` and
-`build-logic/` symlinks resolve before Gradle runs.
+The workflow installs the test-graph skill on the runner so the `sdk/`,
+`build-logic/`, and `standard-nodes/` symlinks resolve before Gradle runs.
 
 ## Importing your project's code
 

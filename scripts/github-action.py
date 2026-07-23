@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Scaffold a GitHub Actions workflow for a test_graph project.
 
-The normal test_graph scaffold keeps ``test_graph/sdk`` and
-``test_graph/build-logic`` as symlinks into the installed test-graph
-skill. A GitHub runner only works if those symlinks point at a real
-skill-manager install, so this script writes a workflow that installs
-the skill with skill-manager before running graph discovery and
+The normal test_graph scaffold keeps ``test_graph/sdk``,
+``test_graph/build-logic``, and ``test_graph/standard-nodes`` as symlinks into
+the installed test-graph skill. A GitHub runner only works if those symlinks
+point at a real skill-manager install, so this script writes a workflow that
+installs the skill with skill-manager before running graph discovery and
 execution.
 
 Usage:
@@ -224,8 +224,8 @@ def _skill_manager_home(override: str | None, mode: str, test_graph_root: Path) 
     inferred = _infer_skill_manager_home(test_graph_root)
     if inferred is None:
         sys.exit(
-            "error: --symlink-mode preserve requires test_graph/sdk or "
-            "test_graph/build-logic to point under "
+            "error: --symlink-mode preserve requires test_graph/sdk, "
+            "test_graph/build-logic, or test_graph/standard-nodes to point under "
             "<home>/skills/test-graph/project_sdk_sources/.\n"
             "  Pass --skill-manager-home explicitly, or use --symlink-mode repair."
         )
@@ -233,7 +233,7 @@ def _skill_manager_home(override: str | None, mode: str, test_graph_root: Path) 
 
 
 def _infer_skill_manager_home(test_graph_root: Path) -> Path | None:
-    for name in ("sdk", "build-logic"):
+    for name in ("sdk", "build-logic", "standard-nodes"):
         link = test_graph_root / name
         if not link.is_symlink():
             continue
@@ -406,6 +406,7 @@ def render_workflow(
             f"          skill-manager install -y {_shell_quote(skill_coordinate)}",
             "          test -d \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/sdk\"",
             "          test -d \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/build-logic\"",
+            "          test -d \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/standard-nodes\"",
             "",
             "      - name: Save skill-manager tool caches",
             "        if: always() && steps.skill-manager-tool-cache.outputs.cache-hit != 'true'",
@@ -445,6 +446,7 @@ def _symlink_step(mode: str) -> list[str]:
             "        run: |",
             "          test \"$(readlink \"$TEST_GRAPH_ROOT/sdk\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/sdk\"",
             "          test \"$(readlink \"$TEST_GRAPH_ROOT/build-logic\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/build-logic\"",
+            "          test \"$(readlink \"$TEST_GRAPH_ROOT/standard-nodes\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/standard-nodes\"",
             "",
         ]
     return [
@@ -468,6 +470,7 @@ def _symlink_step(mode: str) -> list[str]:
         "          }",
         "          relink sdk",
         "          relink build-logic",
+        "          relink standard-nodes",
         "",
     ]
 
