@@ -69,9 +69,22 @@ validationGraph {
         node("sources/RerunJavaProbe.java")
     }
 
+    testGraph("observabilitySmoke") {
+        node("sources/RerunDisabledProbe.py")
+        node("sources/RerunJavaProbe.java")
+    }
+
     testGraph("rerunGuidance") {
         node("sources/RerunGuidanceFailure.py")
     }
+
+    // TEST-GRAPH-PROVIDER-VALIDATION-BEGIN
+    // Provider-only acceptance graph. scaffold.py removes this marked block
+    // from consumer copies so live monitoring remains explicitly opt-in.
+    testGraph("standardMonitoringReadiness") {
+        standardNode("monitoring.cluster.assert.ready")
+    }
+    // TEST-GRAPH-PROVIDER-VALIDATION-END
 
     // Multiple graphs supported — each becomes its own Gradle task.
     // Uncomment to add a second graph that reuses the same scripts with

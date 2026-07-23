@@ -120,6 +120,7 @@ class PlanExecutor(
     private val runId: String,
     private val logger: Logger,
     private val graphName: String,
+    private val observability: GraphObservability,
 ) {
     enum class BuildReplayMode {
         RESUME_GRAPH,
@@ -215,11 +216,13 @@ class PlanExecutor(
                     stdoutLog = stdoutLog,
                     environment = projectedEnvironment +
                             (preparedProvisioning?.environment ?: emptyMap()) +
-                            (environmentExecution?.environment ?: emptyMap()),
+                            (environmentExecution?.environment ?: emptyMap()) +
+                            observability.carrier,
                     timeoutMillis = timeoutMillis,
                 )
 
                 startedAt = Instant.now()
+                observability.nodeLaunch(spec, attempt)
                 execOutcome = registry.forNode(spec).execute(invocation)
                 endedAt = Instant.now()
 
@@ -246,6 +249,11 @@ class PlanExecutor(
             } else {
                 null
             }
+            observability.nodeResult(
+                spec,
+                outcome.status,
+                java.time.Duration.between(startedAt, endedAt),
+            )
             val envelopeJson = if (rerunGuidance == null) {
                 outcome.envelopeJson
             } else {
@@ -453,6 +461,7 @@ class PlanExecutor(
             append(",\"spawnExitCode\":").append(exitCode)
             append(",\"capturedStdoutLog\":").append(jsonString(stdoutRel))
             append(",\"inputContextFile\":").append(jsonString(inputContextRel))
+            append(",\"traceId\":").append(jsonString(observability.traceId))
             appendRerunGuidance(rerunGuidance)
             append("}\n")
         }
@@ -488,6 +497,7 @@ class PlanExecutor(
         sb.append(",\"spawnExitCode\":").append(exitCode)
         sb.append(",\"capturedStdoutLog\":").append(jsonString(stdoutRel))
         sb.append(",\"inputContextFile\":").append(jsonString(inputContextRel))
+        sb.append(",\"traceId\":").append(jsonString(observability.traceId))
         sb.append(",\"assertions\":[]")
         sb.append(",\"artifacts\":[]")
         sb.append(",\"processes\":[]")
