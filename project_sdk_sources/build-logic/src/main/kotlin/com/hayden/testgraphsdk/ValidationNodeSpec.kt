@@ -1,5 +1,16 @@
 package com.hayden.testgraphsdk
 
+private val VALID_NODE_ID = Regex("[a-z0-9._-]{1,128}")
+
+internal fun isValidNodeId(nodeId: String): Boolean = VALID_NODE_ID.matches(nodeId)
+
+internal fun requireValidNodeId(nodeId: String, label: String = "node id"): String {
+    require(isValidNodeId(nodeId)) {
+        "$label must match [a-z0-9._-]{1,128}"
+    }
+    return nodeId
+}
+
 /**
  * Typed graph-model representation of a node.
  *
@@ -36,6 +47,10 @@ data class ValidationNodeSpec(
     val outputs: Map<String, String> = emptyMap(),
     val reports: ReportsSpec = ReportsSpec(),
 ) {
+    init {
+        requireValidNodeId(id)
+    }
+
     fun sideEffectSpecs(): Set<SideEffectSpec> =
         SideEffectSpec.parseAll(sideEffects, "node '$id' sideEffects")
 }

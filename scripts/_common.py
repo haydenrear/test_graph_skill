@@ -37,6 +37,96 @@ from pathlib import Path
 
 VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"}
 
+_GRADLE_MEMORY_GUARDS = (
+    "--no-daemon",
+    "--max-workers=1",
+    "-Pkotlin.compiler.execution.strategy=in-process",
+    "-Dorg.gradle.jvmargs=-Xmx768m -XX:MaxMetaspaceSize=384m",
+)
+_FORBIDDEN_GRADLE_ARG_PREFIXES = (
+    "--daemon",
+    "--foreground",
+    "--max-workers",
+    "-Dorg.gradle.daemon",
+    "-Dorg.gradle.jvmargs",
+    "-Dorg.gradle.workers.max",
+    "-Dkotlin.compiler.execution.strategy",
+    "-Dkotlin.daemon.jvmargs",
+    "-Porg.gradle.daemon",
+    "-Porg.gradle.jvmargs",
+    "-Porg.gradle.workers.max",
+    "-Pkotlin.compiler.execution.strategy",
+    "-Pkotlin.daemon.jvmargs",
+    "--project-prop=org.gradle.daemon",
+    "--project-prop=org.gradle.jvmargs",
+    "--project-prop=org.gradle.workers.max",
+    "--project-prop=kotlin.compiler.execution.strategy",
+    "--project-prop=kotlin.daemon.jvmargs",
+    "--system-prop=org.gradle.daemon",
+    "--system-prop=org.gradle.jvmargs",
+    "--system-prop=org.gradle.workers.max",
+    "--system-prop=kotlin.compiler.execution.strategy",
+    "--system-prop=kotlin.daemon.jvmargs",
+)
+_FORBIDDEN_GRADLE_ENV_PREFIXES = (
+    "-Dorg.gradle.daemon=",
+    "-Dorg.gradle.jvmargs=",
+    "-Dorg.gradle.workers.max=",
+    "-Dkotlin.compiler.execution.strategy=",
+    "-Dkotlin.daemon.jvmargs=",
+    "-Porg.gradle.daemon=",
+    "-Porg.gradle.jvmargs=",
+    "-Porg.gradle.workers.max=",
+    "-Pkotlin.compiler.execution.strategy=",
+    "-Pkotlin.daemon.jvmargs=",
+    "--project-prop=org.gradle.daemon=",
+    "--project-prop=org.gradle.jvmargs=",
+    "--project-prop=org.gradle.workers.max=",
+    "--project-prop=kotlin.compiler.execution.strategy=",
+    "--project-prop=kotlin.daemon.jvmargs=",
+)
+_JVM_OPTION_ENV_VARS = (
+    "GRADLE_OPTS",
+    "JAVA_OPTS",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+)
+_GRADLE_PROJECT_ENV_GUARDS = {
+    "ORG_GRADLE_PROJECT_org.gradle.daemon": "false",
+    "ORG_GRADLE_PROJECT_org.gradle.jvmargs": "-Xmx768m -XX:MaxMetaspaceSize=384m",
+    "ORG_GRADLE_PROJECT_org.gradle.workers.max": "1",
+    "ORG_GRADLE_PROJECT_kotlin.compiler.execution.strategy": "in-process",
+}
+_FORBIDDEN_GRADLE_PROJECT_ENV_VARS = (
+    "ORG_GRADLE_PROJECT_kotlin.daemon.jvmargs",
+)
+_FORBIDDEN_JVM_MEMORY_PREFIXES = (
+    "-Xmx",
+    "-Xms",
+    "-Xmn",
+    "-Xss",
+    "-XX:MaxMetaspaceSize=",
+    "-XX:MetaspaceSize=",
+    "-XX:MaxDirectMemorySize=",
+    "-XX:ThreadStackSize=",
+    "-XX:ReservedCodeCacheSize=",
+    "-XX:InitialCodeCacheSize=",
+    "-XX:CompressedClassSpaceSize=",
+    "-XX:MaxRAM=",
+    "-XX:MaxRAMPercentage=",
+    "-XX:InitialRAMPercentage=",
+    "-XX:MinRAMPercentage=",
+    "-XX:MaxRAMFraction=",
+    "-XX:InitialRAMFraction=",
+    "-XX:MinRAMFraction=",
+)
+_FORBIDDEN_JVM_OPTION_FILE_PREFIXES = (
+    "@",
+    "-XX:Flags=",
+    "-XX:VMOptionsFile=",
+)
+
 # Dotted lowercase segments: app.running, checkout.smoke, user.seeded.v2, ...
 _NODE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$")
 
@@ -198,20 +288,63 @@ def run_gradle(args: list[str], test_graph_root: str | Path | None = None) -> in
     """
     root = target_project_root(test_graph_root)
     gradlew = root / "gradlew"
-    cmd = [str(gradlew)] + args if gradlew.exists() else ["gradle"] + args
+    executable = str(gradlew) if gradlew.exists() else "gradle"
+    cmd = [executable, *_bounded_gradle_args(args)]
     env = gradle_env_with_daemon_disabled()
     proc = subprocess.run(cmd, cwd=root, env=env)
     return proc.returncode
 
 
+def _bounded_gradle_args(args: list[str]) -> list[str]:
+    for index, arg in enumerate(args):
+        if any(arg == prefix or arg.startswith(f"{prefix}=") for prefix in _FORBIDDEN_GRADLE_ARG_PREFIXES):
+            raise ValueError(
+                f"run_gradle argument {arg!r} may not override the bounded Gradle/Kotlin runtime"
+            )
+        if arg in {"-P", "--project-prop", "-D", "--system-prop"} and index + 1 < len(args):
+            key = args[index + 1].split("=", 1)[0]
+            if key in {
+                "org.gradle.daemon",
+                "org.gradle.jvmargs",
+                "org.gradle.workers.max",
+                "kotlin.compiler.execution.strategy",
+                "kotlin.daemon.jvmargs",
+            }:
+                raise ValueError(
+                    f"run_gradle argument {arg!r} may not override the bounded Kotlin runtime"
+                )
+    return [*_GRADLE_MEMORY_GUARDS, *args]
+
+
 def gradle_env_with_daemon_disabled(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return an env dict with ``GRADLE_OPTS`` containing ``-Dorg.gradle.daemon=false``."""
+    """Return an env whose Gradle options cannot override bounded execution."""
     merged = os.environ.copy() if env is None else dict(env)
-    gradle_opts = merged.get("GRADLE_OPTS", "")
-    if gradle_opts:
-        tokens = shlex.split(gradle_opts)
-        if "-Dorg.gradle.daemon=false" not in tokens:
-            merged["GRADLE_OPTS"] = f"{gradle_opts} -Dorg.gradle.daemon=false"
-    else:
-        merged["GRADLE_OPTS"] = "-Dorg.gradle.daemon=false"
+    for name in _JVM_OPTION_ENV_VARS:
+        value = merged.get(name, "")
+        tokens = shlex.split(value) if value else []
+        indirect = next(
+            (
+                token
+                for token in tokens
+                if token.startswith(_FORBIDDEN_JVM_OPTION_FILE_PREFIXES)
+            ),
+            None,
+        )
+        if indirect is not None:
+            raise ValueError(
+                f"{name} token {indirect!r} may load JVM options from a file and "
+                "bypass the bounded Gradle/Kotlin runtime"
+            )
+        tokens = [
+            token for token in tokens
+            if not any(token.startswith(prefix) for prefix in _FORBIDDEN_JVM_MEMORY_PREFIXES)
+            and not any(token.startswith(prefix) for prefix in _FORBIDDEN_GRADLE_ENV_PREFIXES)
+        ]
+        if name == "GRADLE_OPTS":
+            tokens.append("-Dorg.gradle.daemon=false")
+        if value or tokens:
+            merged[name] = shlex.join(tokens)
+    for name in _FORBIDDEN_GRADLE_PROJECT_ENV_VARS:
+        merged.pop(name, None)
+    merged.update(_GRADLE_PROJECT_ENV_GUARDS)
     return merged

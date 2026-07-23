@@ -7,7 +7,8 @@ SDK surface.
 ## Mental Model
 
 - A node is one small unit of validation work. It declares its own `NodeSpec`
-  in code and returns a structured `NodeResult`.
+  in code and returns a structured `NodeResult`. Node IDs match the portable
+  lowercase grammar `[a-z0-9._-]{1,128}`.
 - The script is the source of truth. No YAML sidecar. Discovery invokes each
   script with `--describe-out=<tmp>`.
 - A test graph is a named composition declared in a scaffolded project's
@@ -35,6 +36,8 @@ SDK surface.
 - Data flows downstream through `Context[]`. Publish with
   `NodeResult.publish(key, value)` and read with `ctx.get(upstreamId, key)`.
 - Reports are written under `<test_graph>/build/validation-reports/<runId>/`.
+- A resolved graph contains 1–10,000 nodes; larger or empty plans fail before
+  node execution.
 
 ## Use Scripts First
 
@@ -290,10 +293,17 @@ uses its saved input context from the build directory:
   --resume-from-node <node-id>
 ```
 
-The node must have `rerun=true` in its script metadata, and its saved
-`context/<node-id>.input.json` must include every declared dependency. The
+The node must have `rerun=true` in its script metadata. The source must be a
+closed full execution (never another replay), its full ordered node plan must
+exactly equal the current plan, and its saved `context/<node-id>.input.json`
+must equal the exact ordered current-plan prefix before that node. The
 executor skips earlier plan steps, runs the selected node, continues through the
-remaining graph plan, and rewrites the report in the same build directory.
+remaining graph plan, and writes those selected-to-tail envelopes into a fresh
+sibling report directory. Resume first validates closure v2 against the exact
+source evidence file set, then captures the selected context and carrier once.
+The fresh report continues that captured trace without later source-path reads.
+The replay report records its mode, selected node, and source build, and
+`execution.complete` covers only the selected-to-tail execution scope.
 
 When a rerunnable node fails, Gradle output and `report.md` include rerun guidance
 with both this resume-graph command and the run-only command below.
@@ -312,8 +322,11 @@ downstream graph nodes, run only the selected node from its saved input context:
 
 The selected node must have `rerun=true`, must be in the graph plan, and must
 have a saved `context/<node-id>.input.json` in the build directory. The executor
-runs only that node, writes refreshed envelope/report evidence in the same build
-directory, and leaves downstream graph nodes unexecuted for that invocation.
+runs only that node and writes a fresh one-node replay report, leaving both the
+source build and downstream graph nodes untouched. The report records
+`execution.mode=run-only-node`, the selected node, and the source build;
+`execution.complete` means that one-node replay scope is complete, not that the
+source graph's unselected suffix ran again.
 
 ### Rerun only the failing node while debugging
 
@@ -385,13 +398,15 @@ Every run writes under the scaffolded project's build directory:
 
 ```text
 <test_graph>/build/validation-reports/<runId>/
+  execution-scope.json
+  attempt-closure.json
+  trace-context.json
   envelope/
     <node-id>.json
   node-logs/
     <node-id>.<label>.log
   context/
     <node-id>.input.json
-    step-NNN.json       # only when a large runtime --context arg spills
   summary.json
   report.md
 ```
@@ -399,6 +414,44 @@ Every run writes under the scaffolded project's build directory:
 `<runId>` is timestamp-like, for example `20260428-184103`. Multiple runs
 accumulate until `clean.py` or Gradle `clean` removes them. CI should upload
 `build/validation-reports/` as a whole.
+
+`execution-scope.json` is no-replace run-plan evidence written before execution.
+`attempt-closure.json` is no-replace terminal evidence written only after node
+execution has ended. Closure v2 binds raw scope/carrier bytes and exact present
+context/envelope path-to-SHA-256 maps. A run without a valid closure is not a
+replay source, and report regeneration revalidates the closure against current
+evidence; a missing or mismatched closure is reported `ERRORED`, never green.
+`validationReport` reuses it and the persisted trace carrier, so regeneration
+cannot widen a run-only replay to the full graph or turn a partial plan green.
+It also reconstructs the exact ordered published-data prefix for every saved
+node context and verifies replay input against its captured source snapshot or
+the source-context digest persisted in target scope v3; provenance mismatches
+are explicit summary errors. These digests detect ordinary/protocol mutation,
+not an adversarial owner rewriting both evidence and closure.
+Runs created before scope metadata existed are labeled `legacy-unknown` and
+remain incomplete/errored when regenerated.
+
+Treat report identity checks as validation evidence: each canonical envelope
+filename must match its embedded node ID, and all traced envelopes in a run must
+share the persisted run trace. Context/result/envelope JSON is limited to 16
+MiB per document; aggregate report inventory is limited to 16 MiB each for
+envelopes and contexts plus 500,000 JSON structural tokens. The trace carrier
+is limited to 4 KiB. Report enumeration is streamed and capped at 10,000
+envelopes.
+
+Node process-group supervision is supported on macOS and Linux and requires
+`perl` with its core `POSIX` and `Time::HiRes` modules. Supervisor exit 125
+means an orphaned group was reaped and becomes closable `ERRORED` evidence;
+exit 124 or descendant-inventory overflow means ownership cannot be proved, so
+attempt closure is withheld.
+
+Canonical envelopes use the closed `envelopeVersion: 1` schema. The executor
+validates the SDK-authored NodeResult before adding executor-owned fields, then
+validates the complete envelope before immutable publication. Closure
+publication/acquisition and manual report regeneration call that same complete
+validator. Unknown fields require a future version bump, and contradictory
+evidence such as `status: passed` with a failed assertion can neither close an
+attempt nor produce a green report.
 
 ## Dependency Nodes
 
@@ -495,12 +548,15 @@ Before finalizing work that touches `sources/` or `build.gradle.kts`:
 
 - Run `<skill>/scripts/discover.py`.
 - Run `<skill>/scripts/discover.py <graph>` for each affected graph.
-- Confirm node ids are dotted, stable, and intentional.
+- Confirm node ids match `[a-z0-9._-]{1,128}`, are stable, and are intentional.
+- Confirm the resolved graph contains 1–10,000 nodes.
 - Confirm every node has exactly one kind and one runtime.
 - Confirm all dependencies are declared via script metadata or DSL overlays.
 - Confirm downstream data is published through `NodeResult.publish(...)`.
 - Run `<skill>/scripts/run.py <graph>` or `<skill>/scripts/run.py --all`.
 - Check `build/validation-reports/<runId>/summary.json` and `report.md`.
+- Confirm the report is not flagging missing, invalid, or mismatched node/trace
+  identities.
 
 ## Anti-Patterns
 

@@ -1,6 +1,5 @@
 package com.hayden.testgraphsdk.exec
 
-import com.hayden.testgraphsdk.MiniJson
 import com.hayden.testgraphsdk.ValidationNodeSpec
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.common.Attributes
@@ -11,6 +10,8 @@ import io.opentelemetry.context.propagation.TextMapSetter
 import io.opentelemetry.sdk.OpenTelemetrySdk
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 
@@ -159,6 +160,7 @@ class GraphObservability private constructor(
 
     companion object {
         private const val CARRIER_FILE = "trace-context.json"
+        internal const val TRACE_CARRIER_MAX_UTF8_BYTES = 4 * 1024
         private const val FLUSH_TIMEOUT_MILLIS = 5_000L
         private val TRACE_ID = Regex("^[0-9a-f]{32}$")
         private val setter = TextMapSetter<MutableMap<String, String>> { carrier, key, value ->
@@ -169,21 +171,60 @@ class GraphObservability private constructor(
             override fun get(carrier: Map<String, String>?, key: String): String? = carrier?.get(key)
         }
 
-        fun open(reportDir: File, graphName: String): GraphObservability {
+        internal fun open(
+            reportDir: File,
+            graphName: String,
+            requireExistingCarrier: Boolean = false,
+            replaySourceSnapshot: ReplaySourceSnapshot? = null,
+        ): GraphObservability {
+            require(!(requireExistingCarrier && replaySourceSnapshot != null)) {
+                "choose either an in-place existing carrier or a captured replay source"
+            }
             val sdk = TestGraphOpenTelemetry.sdk
             val carrierFile = File(reportDir, CARRIER_FILE)
-            val originalCarrier = readCarrier(carrierFile)
+            val replayCarrier = replaySourceSnapshot?.let { snapshot ->
+                val parsed = parseCarrierJson(snapshot.carrierJson)
+                require(parsed == snapshot.carrier) {
+                    "captured replay carrier raw and parsed values differ"
+                }
+                parsed
+            }
+            val originalCarrier = when {
+                replayCarrier != null -> {
+                    if (Files.exists(carrierFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                        throw IllegalArgumentException(
+                            "fresh replay report already contains a trace carrier at " +
+                                    carrierFile.absolutePath
+                        )
+                    }
+                    replayCarrier
+                }
+                Files.exists(carrierFile.toPath(), LinkOption.NOFOLLOW_LINKS) ->
+                    readCarrier(carrierFile)
+                requireExistingCarrier -> throw IllegalArgumentException(
+                    "resume requires an existing trace carrier at ${carrierFile.absolutePath}"
+                )
+                else -> null
+            }
             val context = if (originalCarrier == null) {
                 createGraphContext(sdk, graphName, carrierFile)
             } else {
                 sdk.propagators.textMapPropagator.extract(Context.root(), originalCarrier, getter)
             }
-            val traceId = Span.fromContext(context).spanContext.traceId
-            check(TRACE_ID.matches(traceId)) {
+            val spanContext = Span.fromContext(context).spanContext
+            val traceId = spanContext.traceId
+            check(spanContext.isValid && TRACE_ID.matches(traceId)) {
                 "OpenTelemetry did not provide a valid graph trace ID"
             }
+            if (replaySourceSnapshot != null) {
+                check(traceId == replaySourceSnapshot.traceId) {
+                    "captured replay carrier trace does not match its verified trace id"
+                }
+                // Persist the exact verified bytes.  No source pathname is
+                // reopened after ReplaySourceSnapshot acquisition.
+                writeCarrierRaw(carrierFile, replaySourceSnapshot.carrierJson)
+            }
             val carrier = originalCarrier ?: readCarrier(carrierFile)
-                ?: error("graph trace carrier was not persisted")
 
             if (originalCarrier != null) {
                 shortGraphStart(sdk, graphName, context)
@@ -196,6 +237,57 @@ class GraphObservability private constructor(
                 carrier = carrier,
                 startedNanos = System.nanoTime(),
             )
+        }
+
+        internal fun persistedTraceId(reportDir: File): String {
+            val carrierFile = File(reportDir, CARRIER_FILE)
+            if (!Files.isRegularFile(carrierFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                throw IllegalArgumentException(
+                    "run report requires an existing regular non-symlink trace carrier at " +
+                            carrierFile.absolutePath
+                )
+            }
+            val carrier = readCarrier(carrierFile)
+            return traceIdForCarrier(carrier, "persisted graph trace carrier")
+        }
+
+        internal fun parseCarrierJson(json: String): Map<String, String> {
+            val parsed = try {
+                parseBoundedJsonObject(json, "graph trace carrier")
+            } catch (e: Exception) {
+                throw IllegalArgumentException("invalid graph trace carrier: ${e.message}", e)
+            }
+            val carrier = linkedMapOf<String, String>()
+            for ((key, value) in parsed) {
+                if (value !is String) {
+                    throw IllegalArgumentException(
+                        "invalid graph trace carrier: '$key' must have a string value"
+                    )
+                }
+                carrier[key] = value
+            }
+            if (carrier["traceparent"].isNullOrBlank()) {
+                throw IllegalArgumentException(
+                    "invalid graph trace carrier: missing string traceparent"
+                )
+            }
+            return carrier
+        }
+
+        internal fun traceIdForCarrier(
+            carrier: Map<String, String>,
+            label: String = "graph trace carrier",
+        ): String {
+            val context = TestGraphOpenTelemetry.sdk.propagators.textMapPropagator.extract(
+                Context.root(),
+                carrier,
+                getter,
+            )
+            val spanContext = Span.fromContext(context).spanContext
+            check(spanContext.isValid && TRACE_ID.matches(spanContext.traceId)) {
+                "$label did not provide a valid graph trace ID"
+            }
+            return spanContext.traceId
         }
 
         private fun createGraphContext(
@@ -240,27 +332,42 @@ class GraphObservability private constructor(
             }
         }
 
-        private fun readCarrier(file: File): Map<String, String>? {
-            if (!file.isFile) return null
-            val parsed = try {
-                MiniJson.parse(file.readText()) as? Map<*, *>
-            } catch (_: Exception) {
-                null
-            } ?: return null
-            val carrier = parsed.entries.associate { (key, value) ->
-                key.toString() to value.toString()
+        private fun readCarrier(file: File): Map<String, String> {
+            val raw = try {
+                readBoundedJsonObject(
+                    file,
+                    "graph trace carrier",
+                    maxUtf8Bytes = TRACE_CARRIER_MAX_UTF8_BYTES,
+                ).first
+            } catch (e: Exception) {
+                throw IllegalArgumentException("invalid graph trace carrier: ${e.message}", e)
             }
-            return carrier.takeIf { "traceparent" in it }
+            return parseCarrierJson(raw)
         }
 
         private fun writeCarrier(file: File, carrier: Map<String, String>) {
-            file.parentFile.mkdirs()
+            val parent = file.parentFile
+                ?: throw IllegalArgumentException("graph trace carrier requires a parent directory")
+            require(Files.isDirectory(parent.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                "graph trace carrier parent must be a real directory, not a symlink: " +
+                        parent.absolutePath
+            }
             val json = carrier.entries.joinToString(
                 prefix = "{",
                 postfix = "}\n",
                 separator = ",",
             ) { (key, value) -> "\"${jsonEscape(key)}\":\"${jsonEscape(value)}\"" }
-            file.writeText(json)
+            writeCarrierRaw(file, json)
+        }
+
+        private fun writeCarrierRaw(file: File, json: String) {
+            val encoded = json.toByteArray(Charsets.UTF_8)
+            require(encoded.size <= TRACE_CARRIER_MAX_UTF8_BYTES) {
+                "graph trace carrier exceeds $TRACE_CARRIER_MAX_UTF8_BYTES UTF-8 bytes after serialization"
+            }
+            // Re-validate in-memory bytes immediately before publication.
+            parseCarrierJson(json)
+            publishImmutableEvidence(file.toPath(), encoded, "graph trace carrier")
         }
 
         private fun recordTraceCorrelation(sdk: OpenTelemetrySdk, context: Context) {
@@ -285,7 +392,11 @@ class GraphObservability private constructor(
                     '\n' -> append("\\n")
                     '\r' -> append("\\r")
                     '\t' -> append("\\t")
-                    else -> append(char)
+                    else -> if (char.code < 0x20) {
+                        append("\\u").append("%04x".format(char.code))
+                    } else {
+                        append(char)
+                    }
                 }
             }
         }
