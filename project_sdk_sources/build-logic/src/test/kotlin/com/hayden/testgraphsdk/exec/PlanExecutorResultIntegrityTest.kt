@@ -244,7 +244,7 @@ class PlanExecutorResultIntegrityTest {
                 id = "work.cleanup",
                 kind = NodeKind.FIXTURE,
                 runtime = ValidationRuntime.Uv("cleanup.py"),
-                dependsOn = listOf("work.failed"),
+                dependsOn = listOf("work.failed", "work.ordinary"),
                 tags = setOf("finalizer"),
             ),
         )

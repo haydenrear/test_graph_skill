@@ -177,6 +177,10 @@ class PlanExecutor(
                     nodeLogsDir = nodeLogsDir,
                     envelopeDir = envelopeDir,
                 )
+                // A skipped node has reached a canonical terminal state. Count
+                // it as settled so a finalizer that depends on the ordinary
+                // suffix can still run after an earlier failure.
+                executed += spec.id
                 continue
             }
             logger.lifecycle("  [${i + 1}/${executionPlan.size}] ${spec.id} (${spec.runtime.name})")
