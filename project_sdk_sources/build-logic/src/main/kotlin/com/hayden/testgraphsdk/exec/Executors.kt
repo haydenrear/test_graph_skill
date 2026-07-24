@@ -242,8 +242,35 @@ internal fun awaitWithTimeout(
         }
         Thread.currentThread().interrupt()
         throw interrupted
+    } catch (failure: Throwable) {
+        try {
+            terminateAfterExecutorFailure(process, managedCommand)
+        } catch (cleanupFailure: Throwable) {
+            if (cleanupFailure !== failure) cleanupFailure.addSuppressed(failure)
+            throw cleanupFailure
+        }
+        throw failure
     } finally {
         managedCommand?.discardStatus()
+    }
+}
+
+private fun terminateAfterExecutorFailure(
+    process: Process,
+    managedCommand: PosixProcessGroupController.ManagedCommand?,
+) {
+    if (process.isAlive) process.destroy()
+    if (!process.waitFor(PROCESS_TERM_GRACE_MILLIS, TimeUnit.MILLISECONDS)) {
+        process.destroyForcibly()
+        process.waitFor(PROCESS_KILL_GRACE_MILLIS, TimeUnit.MILLISECONDS)
+    }
+    if (process.isAlive) {
+        throw ProcessOwnershipUncertainException(
+            "node process-group supervisor remained alive after executor failure"
+        )
+    }
+    if (managedCommand != null) {
+        requireSupervisorTerminalStatus(process, managedCommand)
     }
 }
 

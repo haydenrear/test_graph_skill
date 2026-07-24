@@ -260,7 +260,17 @@ class PlanExecutor(
 
                 startedAt = Instant.now()
                 observability.nodeLaunch(spec, attempt)
-                execOutcome = registry.forNode(spec).execute(invocation)
+                execOutcome = try {
+                    registry.forNode(spec).execute(invocation)
+                } catch (e: ProcessOwnershipUncertainException) {
+                    throw e
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw e
+                } catch (e: Exception) {
+                    writeExecutorFailureResult(spec, resultOut, e, startedAt)
+                    ExecutionOutcome.Completed(-1)
+                }
                 endedAt = Instant.now()
 
                 // Stop retrying as soon as the executor reports the child
@@ -711,6 +721,34 @@ class PlanExecutor(
                 append(",\"status\":\"errored\"")
                 append(",\"failureMessage\":")
                 append(jsonString("environmentRepository failed: ${error.message ?: error::class.simpleName}"))
+                append(",\"startedAt\":").append(jsonString(now))
+                append(",\"endedAt\":").append(jsonString(now))
+                append(",\"assertions\":[]")
+                append(",\"artifacts\":[]")
+                append(",\"processes\":[]")
+                append(",\"metrics\":{}")
+                append(",\"logs\":[]")
+                append(",\"published\":{}")
+                append("}\n")
+            }
+        )
+    }
+
+    private fun writeExecutorFailureResult(
+        spec: ValidationNodeSpec,
+        resultOut: File,
+        error: Exception,
+        timestamp: Instant,
+    ) {
+        resultOut.parentFile.mkdirs()
+        val now = timestamp.toString()
+        resultOut.writeText(
+            buildString {
+                append("{")
+                append("\"nodeId\":").append(jsonString(spec.id))
+                append(",\"status\":\"errored\"")
+                append(",\"failureMessage\":")
+                append(jsonString("executor failed: ${error.message ?: error::class.simpleName}"))
                 append(",\"startedAt\":").append(jsonString(now))
                 append(",\"endedAt\":").append(jsonString(now))
                 append(",\"assertions\":[]")

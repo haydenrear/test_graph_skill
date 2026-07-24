@@ -289,6 +289,106 @@ class PlanExecutorResultIntegrityTest {
         )
     }
 
+    @Test
+    fun executorFailureWritesEnvelopeAndRunsCleanupFinalizer() {
+        disableExportForUnitTest()
+        val projectRoot = Files.createTempDirectory(
+            "test-graph-executor-failure-finalizer"
+        ).toFile()
+        val project = ProjectBuilder.builder()
+            .withProjectDir(projectRoot)
+            .build()
+        val reportRoot = projectRoot.resolve("report").apply { mkdirs() }
+        val reportDirectory = project.layout.dir(
+            project.provider { reportRoot }
+        ).get()
+        val observability = GraphObservability.open(
+            reportRoot,
+            "executorFailureFinalizer",
+        )
+        val launched = mutableListOf<String>()
+        val executor = object : ValidationExecutor {
+            override val runtimeName: String = "uv"
+
+            override fun execute(invocation: NodeInvocation): ExecutionOutcome {
+                launched += invocation.spec.id
+                if (invocation.spec.id == "work.crashed") {
+                    throw RuntimeException("Cannot allocate memory")
+                }
+                val timestamp = Instant.now().toString()
+                invocation.resultOut.parentFile.mkdirs()
+                invocation.resultOut.writeText(
+                    """{
+                      "nodeId":"${invocation.spec.id}",
+                      "status":"passed",
+                      "startedAt":"$timestamp",
+                      "endedAt":"$timestamp",
+                      "assertions":[],
+                      "artifacts":[],
+                      "processes":[],
+                      "metrics":{},
+                      "logs":[],
+                      "published":{}
+                    }""".trimIndent()
+                )
+                return ExecutionOutcome.Completed(0)
+            }
+        }
+        val plan = listOf(
+            ValidationNodeSpec(
+                id = "work.crashed",
+                kind = NodeKind.ASSERTION,
+                runtime = ValidationRuntime.Uv("crashed.py"),
+            ),
+            ValidationNodeSpec(
+                id = "work.ordinary",
+                kind = NodeKind.ASSERTION,
+                runtime = ValidationRuntime.Uv("ordinary.py"),
+                dependsOn = listOf("work.crashed"),
+            ),
+            ValidationNodeSpec(
+                id = "work.cleanup",
+                kind = NodeKind.FIXTURE,
+                runtime = ValidationRuntime.Uv("cleanup.py"),
+                dependsOn = listOf("work.crashed", "work.ordinary"),
+                tags = setOf("finalizer"),
+            ),
+        )
+
+        val failure = try {
+            assertFailsWith<RuntimeException> {
+                PlanExecutor(
+                    registry = ExecutorRegistry(mapOf("uv" to executor)),
+                    projectDir = project.layout.projectDirectory,
+                    reportDir = reportDirectory,
+                    runId = "executor-failure-finalizer",
+                    logger = project.logger,
+                    graphName = "executorFailureFinalizer",
+                    observability = observability,
+                ).run(plan)
+            }
+        } finally {
+            observability.finish("failed", timeoutMillis = 10)
+        }
+
+        assertContains(failure.message.orEmpty(), "work.crashed errored")
+        assertEquals(listOf("work.crashed", "work.cleanup"), launched)
+        val statuses = plan.associate { spec ->
+            spec.id to MiniJson.obj(
+                MiniJson.parse(
+                    reportRoot.resolve("envelope/${spec.id}.json").readText()
+                )
+            )
+        }
+        assertEquals("errored", statuses.getValue("work.crashed")["status"])
+        assertContains(
+            statuses.getValue("work.crashed")["failureMessage"].toString(),
+            "Cannot allocate memory",
+        )
+        assertEquals("skipped", statuses.getValue("work.ordinary")["status"])
+        assertEquals("passed", statuses.getValue("work.cleanup")["status"])
+    }
+
     private fun runSingleNode(
         executionOutcome: ExecutionOutcome = ExecutionOutcome.Completed(0),
         writeResult: (NodeInvocation) -> Unit,
