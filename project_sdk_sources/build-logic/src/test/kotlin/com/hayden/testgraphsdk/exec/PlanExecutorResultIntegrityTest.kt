@@ -184,6 +184,111 @@ class PlanExecutorResultIntegrityTest {
         }
     }
 
+    @Test
+    fun failureSkipsOrdinarySuffixButRunsCleanupFinalizer() {
+        disableExportForUnitTest()
+        val projectRoot = Files.createTempDirectory(
+            "test-graph-failure-finalizer"
+        ).toFile()
+        val project = ProjectBuilder.builder()
+            .withProjectDir(projectRoot)
+            .build()
+        val reportRoot = projectRoot.resolve("report").apply { mkdirs() }
+        val reportDirectory = project.layout.dir(
+            project.provider { reportRoot }
+        ).get()
+        val observability = GraphObservability.open(
+            reportRoot,
+            "failureFinalizer",
+        )
+        val launched = mutableListOf<String>()
+        val executor = object : ValidationExecutor {
+            override val runtimeName: String = "uv"
+
+            override fun execute(invocation: NodeInvocation): ExecutionOutcome {
+                launched += invocation.spec.id
+                val failed = invocation.spec.id == "work.failed"
+                val timestamp = Instant.now().toString()
+                invocation.resultOut.parentFile.mkdirs()
+                invocation.resultOut.writeText(
+                    """{
+                      "nodeId":"${invocation.spec.id}",
+                      "status":"${if (failed) "failed" else "passed"}",
+                      ${if (failed) "\"failureMessage\":\"intentional\"," else ""}
+                      "startedAt":"$timestamp",
+                      "endedAt":"$timestamp",
+                      "assertions":[],
+                      "artifacts":[],
+                      "processes":[],
+                      "metrics":{},
+                      "logs":[],
+                      "published":{}
+                    }""".trimIndent()
+                )
+                return ExecutionOutcome.Completed(if (failed) 1 else 0)
+            }
+        }
+        val plan = listOf(
+            ValidationNodeSpec(
+                id = "work.failed",
+                kind = NodeKind.ASSERTION,
+                runtime = ValidationRuntime.Uv("failed.py"),
+            ),
+            ValidationNodeSpec(
+                id = "work.ordinary",
+                kind = NodeKind.ASSERTION,
+                runtime = ValidationRuntime.Uv("ordinary.py"),
+                dependsOn = listOf("work.failed"),
+            ),
+            ValidationNodeSpec(
+                id = "work.cleanup",
+                kind = NodeKind.FIXTURE,
+                runtime = ValidationRuntime.Uv("cleanup.py"),
+                dependsOn = listOf("work.failed"),
+                tags = setOf("finalizer"),
+            ),
+        )
+
+        val failure = try {
+            assertFailsWith<RuntimeException> {
+                PlanExecutor(
+                    registry = ExecutorRegistry(mapOf("uv" to executor)),
+                    projectDir = project.layout.projectDirectory,
+                    reportDir = reportDirectory,
+                    runId = "failure-finalizer",
+                    logger = project.logger,
+                    graphName = "failureFinalizer",
+                    observability = observability,
+                ).run(plan)
+            }
+        } finally {
+            observability.finish("failed", timeoutMillis = 10)
+        }
+
+        assertContains(failure.message.orEmpty(), "work.failed failed")
+        assertEquals(listOf("work.failed", "work.cleanup"), launched)
+        assertEquals(
+            "skipped",
+            MiniJson.obj(
+                MiniJson.parse(
+                    reportRoot.resolve(
+                        "envelope/work.ordinary.json"
+                    ).readText()
+                )
+            )["status"],
+        )
+        assertEquals(
+            "passed",
+            MiniJson.obj(
+                MiniJson.parse(
+                    reportRoot.resolve(
+                        "envelope/work.cleanup.json"
+                    ).readText()
+                )
+            )["status"],
+        )
+    }
+
     private fun runSingleNode(
         executionOutcome: ExecutionOutcome = ExecutionOutcome.Completed(0),
         writeResult: (NodeInvocation) -> Unit,

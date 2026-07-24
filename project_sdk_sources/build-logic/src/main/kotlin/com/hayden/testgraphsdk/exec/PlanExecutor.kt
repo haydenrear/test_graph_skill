@@ -154,6 +154,8 @@ class PlanExecutor(
             reportRoot = reportRoot,
             provisioningState = provisioningState,
         )
+        val executed = mutableSetOf<String>()
+        var executionFailure: RuntimeException? = null
 
         // .tmp-results/ holds the SDK's raw NodeResult JSON before we
         // post-process it. node-logs/ holds the merged stdout+stderr
@@ -164,6 +166,19 @@ class PlanExecutor(
         ensureRealDirectory(envelopeDir, "canonical envelope directory")
 
         for ((i, spec) in executionPlan.withIndex()) {
+            if (executionFailure != null && !shouldRunAfterFailure(spec, executed)) {
+                logger.lifecycle(
+                    "  [${i + 1}/${executionPlan.size}] ${spec.id} skipped after earlier failure"
+                )
+                writeSkippedEnvelope(
+                    spec = spec,
+                    cumulative = cumulative,
+                    reportRoot = reportRoot,
+                    nodeLogsDir = nodeLogsDir,
+                    envelopeDir = envelopeDir,
+                )
+                continue
+            }
             logger.lifecycle("  [${i + 1}/${executionPlan.size}] ${spec.id} (${spec.runtime.name})")
 
             val inputContextFile = if (
@@ -312,19 +327,72 @@ class PlanExecutor(
             )
 
             cumulative += ContextItem(spec.id, validatedEnvelope.published)
+            executed += spec.id
 
             // The canonical envelope is the terminal signal. Its validator
             // already enforces that PASS implies spawn exit 0; failed/error
-            // evidence may legitimately carry a non-zero process exit. Throw
-            // on every non-passing status so RunTestGraphTask gets the FAIL
-            // signal while retaining the exact canonical evidence.
-            if (outcome.status != "passed") {
-                throw RuntimeException(
+            // evidence may legitimately carry a non-zero process exit. Retain
+            // the first failure while continuing only cleanup/finalizer nodes
+            // whose dependencies have executed, then rethrow after the plan.
+            if (outcome.status != "passed" && executionFailure == null) {
+                executionFailure = RuntimeException(
                     "node ${spec.id} ${outcome.status}" +
                             (outcome.reason?.let { ": $it" } ?: "")
                 )
             }
         }
+        executionFailure?.let { throw it }
+    }
+
+    private fun shouldRunAfterFailure(
+        spec: ValidationNodeSpec,
+        executed: Set<String>,
+    ): Boolean =
+        isFinalizer(spec) && spec.dependsOn.all { it in executed }
+
+    private fun isFinalizer(spec: ValidationNodeSpec): Boolean =
+        spec.id.endsWith(".cleanup") || "finalizer" in spec.tags
+
+    private fun writeSkippedEnvelope(
+        spec: ValidationNodeSpec,
+        cumulative: List<ContextItem>,
+        reportRoot: File,
+        nodeLogsDir: File,
+        envelopeDir: File,
+    ) {
+        val now = Instant.now()
+        val stdoutLog = File(nodeLogsDir, "${spec.id}.stdout.log").apply {
+            parentFile.mkdirs()
+            writeText("node skipped after earlier graph failure\n")
+        }
+        val inputContextFile = writeInputContextSnapshot(
+            cumulative,
+            reportRoot,
+            spec.id,
+        )
+        observability.nodeResult(spec, "skipped", java.time.Duration.ZERO)
+        val outcome = synthesized(
+            spec = spec,
+            status = "skipped",
+            reason = "node skipped after earlier graph failure",
+            stdoutRel = relativeToReport(reportRoot, stdoutLog),
+            inputContextRel = relativeToReport(reportRoot, inputContextFile),
+            exitCode = -1,
+            startedAt = now,
+            endedAt = now,
+        )
+        val canonical = CanonicalEnvelopeValidator.validate(
+            outcome.envelopeJson,
+            "canonical skipped envelope for node '${spec.id}'",
+            expectedNodeId = spec.id,
+            expectedTraceId = observability.traceId,
+        )
+        publishImmutableEvidence(
+            File(envelopeDir, "${spec.id}.json").toPath(),
+            outcome.envelopeJson.toByteArray(Charsets.UTF_8),
+            "canonical skipped envelope for node '${spec.id}'",
+        )
+        check(canonical.status == "skipped")
     }
 
     private data class ResumeState(
