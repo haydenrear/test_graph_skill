@@ -873,7 +873,9 @@ internal object RunReportWriter {
                 observedNonPassingEnvelope = true
             }
             envelopeDigests[envelopeRelative] = capturedEnvelope.sha256
-            expectedContext += ContextItem(nodeId, envelope.published)
+            if (envelope.status != "skipped") {
+                expectedContext += ContextItem(nodeId, envelope.published)
+            }
         }
 
         requireEvidenceNamesUnchanged(contextDirectory, contextEntries, MAX_CONTEXT_SNAPSHOT_FILES)
@@ -1304,10 +1306,14 @@ internal object RunReportWriter {
         val publishedByNodeId = parsed.associate { envelope ->
             envelope.validated.nodeId to envelope.validated.published
         }
+        val skippedNodeIds = parsed.asSequence()
+            .filter { it.validated.status == "skipped" }
+            .mapTo(linkedSetOf()) { it.validated.nodeId }
         val contextIntegrity = inspectContextSnapshots(
             runDir = runDir,
             expectedNodeIds = effectiveExpectedNodeIds,
             publishedByNodeId = publishedByNodeId,
+            skippedNodeIds = skippedNodeIds,
             replay = effectiveReplay,
             replaySourceSnapshot = replaySourceSnapshot,
             verifyProvenance = true,
@@ -1931,6 +1937,7 @@ internal object RunReportWriter {
         maxFiles: Int = MAX_CONTEXT_SNAPSHOT_FILES,
         maxAggregateBytes: Long = MAX_AGGREGATE_CONTEXT_BYTES,
         publishedByNodeId: Map<String, Map<String, String>> = emptyMap(),
+        skippedNodeIds: Set<String> = emptySet(),
         replay: ReplayMetadata? = null,
         replaySourceSnapshot: ReplaySourceSnapshot? = null,
         verifyProvenance: Boolean = false,
@@ -2046,6 +2053,7 @@ internal object RunReportWriter {
                 expectedNodeIds,
                 snapshots,
                 publishedByNodeId,
+                skippedNodeIds,
                 replay,
                 replaySourceSnapshot,
             )
@@ -2068,6 +2076,7 @@ internal object RunReportWriter {
         expectedNodeIds: List<String>,
         snapshots: Map<String, ParsedContextSnapshot>,
         publishedByNodeId: Map<String, Map<String, String>>,
+        skippedNodeIds: Set<String>,
         replay: ReplayMetadata?,
         replaySourceSnapshot: ReplaySourceSnapshot?,
     ): Pair<List<String>, List<String>> {
@@ -2113,7 +2122,7 @@ internal object RunReportWriter {
             val published = publishedByNodeId[nodeId]
             if (published == null) {
                 predecessorEvidenceAvailable = false
-            } else if (predecessorEvidenceAvailable) {
+            } else if (predecessorEvidenceAvailable && nodeId !in skippedNodeIds) {
                 expectedContext += ContextItem(nodeId, published)
             }
         }

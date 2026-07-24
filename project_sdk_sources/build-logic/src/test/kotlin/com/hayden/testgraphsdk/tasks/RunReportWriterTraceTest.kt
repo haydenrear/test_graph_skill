@@ -628,6 +628,12 @@ class RunReportWriterTraceTest {
                 )
             )
         }
+        Files.delete(source.resolve("context/work.cleanup.input.json").toPath())
+        writeInputContextSnapshot(
+            listOf(ContextItem("work.failed", emptyMap())),
+            source,
+            "work.cleanup",
+        )
         writeTraceCarrier(source, traceId)
 
         RunReportWriter.persistAttemptClosure(
@@ -648,6 +654,18 @@ class RunReportWriterTraceTest {
             MiniJson.parse(source.resolve("attempt-closure.json").readText())
         )
         assertEquals(listOf("work.cleanup"), closure["finalizerNodeIds"])
+
+        val outcome = RunReportWriter.writeRunReport(
+            runDir = source,
+            graphName = graphName,
+            expectedNodeIds = expected,
+            executionFailure = RuntimeException("expected fixture failure"),
+            expectedTraceId = traceId,
+        )
+        assertEquals("errored", outcome.status)
+        val summary = source.resolve("summary.json").readText()
+        assertContains(summary, "\"contextProvenanceViolationNodeIds\":[]")
+        assertFalse(summary.contains("\"attemptClosureIntegrityError\""))
     }
 
     @Test
