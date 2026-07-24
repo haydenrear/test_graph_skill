@@ -656,6 +656,7 @@ def inspect_run_identity(
             "runId",
             "traceId",
             "scope",
+            "finalizerNodeIds",
             "scopeSha256",
             "carrierSha256",
             "contextSha256",
@@ -664,8 +665,8 @@ def inspect_run_identity(
         "attempt closure has exact fields",
     )
     _require(
-        type(closure["version"]) is int and closure["version"] == 2,
-        "attempt closure version is 2",
+        type(closure["version"]) is int and closure["version"] == 3,
+        "attempt closure version is 3",
     )
     _require(
         closure["runId"] == canonical_run_dir.name,
@@ -677,6 +678,20 @@ def inspect_run_identity(
         "attempt closure trace id is valid",
     )
     _require(closure.get("scope") == scope, "attempt closure scope is exact")
+    finalizer_node_ids = closure.get("finalizerNodeIds")
+    _require(
+        isinstance(finalizer_node_ids, list)
+        and all(isinstance(node_id, str) for node_id in finalizer_node_ids)
+        and len(finalizer_node_ids) == len(set(finalizer_node_ids))
+        and all(node_id in expected_node_ids for node_id in finalizer_node_ids)
+        and finalizer_node_ids
+        == [
+            node_id
+            for node_id in expected_node_ids
+            if node_id in set(finalizer_node_ids)
+        ],
+        "attempt closure finalizer node ids are unique, scoped, and ordered",
+    )
     _require(
         closure.get("scopeSha256")
         == _hash_bounded_file(
