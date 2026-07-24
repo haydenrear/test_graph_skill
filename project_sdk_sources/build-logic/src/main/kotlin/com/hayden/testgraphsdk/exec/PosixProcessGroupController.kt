@@ -25,6 +25,7 @@ internal object PosixProcessGroupController {
     const val PROCESS_GROUP_CLEANUP_FAILED_EXIT_CODE = 124
     private const val MAX_ARGUMENTS = 4_096
     private const val MAX_ARGUMENT_UTF8_BYTES = 1024 * 1024
+    private const val EXIT_QUIESCENCE_POLLS = 200
 
     internal sealed interface TerminalStatus {
         data class ChildExit(val exitCode: Int) : TerminalStatus
@@ -192,6 +193,16 @@ internal object PosixProcessGroupController {
         my ${'$'}waited = waitpid(${'$'}child, 0);
         die "managed command wait failed: ${'$'}!\n" if ${'$'}waited < 0;
         my ${'$'}status = ${'$'}?;
+        # A multiprocessing launcher can reap its worker pool asynchronously:
+        # the leader has returned, but an already-stopping worker remains in
+        # the process group for a few scheduling quanta. Give that cooperative
+        # shutdown a bounded two-second quiescence window before classifying it
+        # as an orphan. A genuinely persistent member is still reaped and
+        # reported as a contract violation below.
+        for (1..${EXIT_QUIESCENCE_POLLS}) {
+            last unless ${'$'}group_alive->();
+            usleep(10_000);
+        }
         if (${'$'}group_alive->()) {
             print STDERR "managed command leader exited with live process-group members; reaping group\n";
             unless (${'$'}reap_group->()) {

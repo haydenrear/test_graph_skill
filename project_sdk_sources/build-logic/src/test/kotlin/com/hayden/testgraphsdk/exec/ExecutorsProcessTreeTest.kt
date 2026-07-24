@@ -47,13 +47,39 @@ class ExecutorsProcessTreeTest {
 
         try {
             val outcome = assertIs<ExecutionOutcome.ProcessContractViolation>(
-                awaitWithTimeout(process, 2_000, managedCommand)
+                awaitWithTimeout(process, 5_000, managedCommand)
             )
             assertEquals(
                 PosixProcessGroupController.ORPHANED_GROUP_REAPED_EXIT_CODE,
                 outcome.exitCode,
             )
             kotlin.test.assertTrue(outcome.reason.contains("surviving members"))
+            val child = waitForChildPid(pidFile)
+            assertEventuallyDead(child)
+        } finally {
+            process.descendants().forEach { it.destroyForcibly() }
+            process.destroyForcibly()
+            Files.deleteIfExists(pidFile)
+        }
+    }
+
+    @Test
+    fun successfulLauncherAllowsBoundedWorkerPoolQuiescence() {
+        val pidFile = Files.createTempFile("test-graph-quiescing-child", ".pid")
+        Files.deleteIfExists(pidFile)
+        val managedCommand = PosixProcessGroupController.wrap(listOf(
+            "/bin/sh",
+            "-c",
+            "sleep 0.2 </dev/null >/dev/null 2>&1 & child=\$!; " +
+                    "echo \$child > '${pidFile}'; exit 0",
+        ))
+        val process = ProcessBuilder(managedCommand.arguments).start()
+
+        try {
+            assertEquals(
+                ExecutionOutcome.Completed(0),
+                awaitWithTimeout(process, 2_000, managedCommand),
+            )
             val child = waitForChildPid(pidFile)
             assertEventuallyDead(child)
         } finally {
