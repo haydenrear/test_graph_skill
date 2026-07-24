@@ -111,6 +111,8 @@ internal fun awaitWithTimeout(
     timeoutMillis: Long,
     managedCommand: PosixProcessGroupController.ManagedCommand? = null,
     maxTrackedDescendants: Int = MAX_TRACKED_DESCENDANTS,
+    visitDescendants: (ProcessHandle, (ProcessHandle) -> Unit) -> Unit =
+        ::visitProcessDescendants,
 ): ExecutionOutcome {
     require(maxTrackedDescendants > 0) {
         "maximum tracked descendant count must be positive"
@@ -123,21 +125,37 @@ internal fun awaitWithTimeout(
 
     fun observeDescendants(): Boolean {
         var overflow = false
-        root.descendants().use { stream ->
-            val iterator = stream.iterator()
-            while (iterator.hasNext()) {
-                val handle = iterator.next()
-                if (handle.pid() in descendants) continue
-                if (descendants.size >= maxTrackedDescendants) {
-                    // Fail-before-retention: do not grow a collection from an
-                    // adversarial fork tree. Kill overflow members as they are
-                    // observed; the bounded retained prefix is cleaned below.
-                    handle.destroyForcibly()
-                    overflow = true
-                } else {
-                    descendants[handle.pid()] = handle
+        try {
+            visitDescendants(root) { handle ->
+                if (handle.pid() !in descendants) {
+                    if (descendants.size >= maxTrackedDescendants) {
+                        // Fail-before-retention: do not grow a collection from an
+                        // adversarial fork tree. Kill overflow members as they are
+                        // observed; the bounded retained prefix is cleaned below.
+                        handle.destroyForcibly()
+                        overflow = true
+                    } else {
+                        descendants[handle.pid()] = handle
+                    }
                 }
             }
+        } catch (failure: RuntimeException) {
+            if (
+                managedCommand != null &&
+                failure.message.orEmpty().contains(
+                    "Cannot allocate memory",
+                    ignoreCase = true,
+                )
+            ) {
+                // macOS ProcessHandle.descendants() can transiently fail with
+                // ENOMEM after repeated Metal workloads have filled swap.
+                // The POSIX supervisor remains the ownership authority: it
+                // reaps the complete child process group before reporting a
+                // terminal status, so a failed advisory inventory must not
+                // orphan the node or bypass graph finalizers.
+                return false
+            }
+            throw failure
         }
         return overflow
     }
@@ -255,6 +273,16 @@ internal fun awaitWithTimeout(
     }
 }
 
+private fun visitProcessDescendants(
+    root: ProcessHandle,
+    visit: (ProcessHandle) -> Unit,
+) {
+    root.descendants().use { stream ->
+        val iterator = stream.iterator()
+        while (iterator.hasNext()) visit(iterator.next())
+    }
+}
+
 private fun terminateAfterExecutorFailure(
     process: Process,
     managedCommand: PosixProcessGroupController.ManagedCommand?,
@@ -326,7 +354,7 @@ private fun waitForHandlesToExit(
 }
 
 private const val MAX_TRACKED_DESCENDANTS = 4_096
-private const val PROCESS_POLL_MILLIS = 25L
+private const val PROCESS_POLL_MILLIS = 100L
 private const val PROCESS_CLEANUP_POLL_MILLIS = 10L
 private const val PROCESS_TERM_GRACE_MILLIS = 1_000L
 private const val PROCESS_KILL_GRACE_MILLIS = 2_000L

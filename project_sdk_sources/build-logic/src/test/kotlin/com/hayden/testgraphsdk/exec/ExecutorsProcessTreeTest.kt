@@ -155,6 +155,30 @@ class ExecutorsProcessTreeTest {
         }
     }
 
+    @Test
+    fun transientInventoryEnomemFallsBackToSupervisorCleanup() {
+        val managedCommand = PosixProcessGroupController.wrap(
+            listOf("/bin/sh", "-c", "sleep 30")
+        )
+        val process = ProcessBuilder(managedCommand.arguments).start()
+
+        try {
+            val outcome = awaitWithTimeout(
+                process = process,
+                timeoutMillis = 250,
+                managedCommand = managedCommand,
+                visitDescendants = { _, _ ->
+                    throw RuntimeException("Cannot allocate memory")
+                },
+            )
+            assertIs<ExecutionOutcome.TimedOut>(outcome)
+            assertFalse(process.isAlive)
+        } finally {
+            process.descendants().forEach { it.destroyForcibly() }
+            process.destroyForcibly()
+        }
+    }
+
     private fun waitForChildPid(pidFile: java.nio.file.Path): Long {
         val deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos()
         while (!Files.isRegularFile(pidFile)) {
