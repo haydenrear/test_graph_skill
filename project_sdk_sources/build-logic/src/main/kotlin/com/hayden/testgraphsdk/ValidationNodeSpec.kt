@@ -55,6 +55,9 @@ data class ValidationNodeSpec(
         SideEffectSpec.parseAll(sideEffects, "node '$id' sideEffects")
 }
 
+internal fun ValidationNodeSpec.isFinalizerNode(): Boolean =
+    id.endsWith(".cleanup") || "finalizer" in tags
+
 data class ReportsSpec(
     val structuredJson: Boolean = true,
     val junitXml: Boolean = false,

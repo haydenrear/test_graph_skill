@@ -3,6 +3,7 @@ package com.hayden.testgraphsdk.tasks
 import com.hayden.testgraphsdk.GraphAssembler
 import com.hayden.testgraphsdk.TestGraphSpec
 import com.hayden.testgraphsdk.Toolchain
+import com.hayden.testgraphsdk.isFinalizerNode
 import com.hayden.testgraphsdk.exec.ExecutorRegistry
 import com.hayden.testgraphsdk.exec.GraphObservability
 import com.hayden.testgraphsdk.exec.PlanExecutor
@@ -254,6 +255,9 @@ abstract class RunTestGraphTask : DefaultTask() {
                     runDir = reportDir.asFile,
                     graphName = graphSpec.name,
                     expectedNodeIds = expectedNodeIds,
+                    finalizerNodeIds = selection.executionPlan
+                        .filter { it.isFinalizerNode() }
+                        .mapTo(linkedSetOf()) { it.id },
                     traceId = observability.traceId,
                     replay = replayMetadata,
                 )

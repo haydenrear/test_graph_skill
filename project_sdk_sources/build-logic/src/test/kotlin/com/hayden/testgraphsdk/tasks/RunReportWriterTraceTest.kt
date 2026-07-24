@@ -549,8 +549,8 @@ class RunReportWriterTraceTest {
     }
 
     @Test
-    fun closureV2BindsRawScopeCarrierAndExactSortedEvidenceMaps() {
-        val source = Files.createTempDirectory("test-graph-closure-v2").toFile()
+    fun closureV3BindsFinalizersRawScopeCarrierAndExactSortedEvidenceMaps() {
+        val source = Files.createTempDirectory("test-graph-closure-v3").toFile()
         val traceId = "0123456789abcdef0123456789abcdef"
         val expected = listOf("before", "selected")
         RunReportWriter.persistExecutionScope(source, graphName, expected)
@@ -561,7 +561,8 @@ class RunReportWriterTraceTest {
 
         val closureRaw = source.resolve("attempt-closure.json").readText()
         val closure = MiniJson.obj(MiniJson.parse(closureRaw))
-        assertEquals(2L, closure["version"])
+        assertEquals(3L, closure["version"])
+        assertEquals(emptyList<Any?>(), closure["finalizerNodeIds"])
         assertEquals(
             com.hayden.testgraphsdk.exec.sha256Utf8(
                 source.resolve("execution-scope.json").readText()
@@ -582,6 +583,71 @@ class RunReportWriterTraceTest {
             listOf("envelope/before.json", "envelope/selected.json"),
             MiniJson.obj(closure["envelopeSha256"]).keys.toList(),
         )
+    }
+
+    @Test
+    fun closureV2WithoutFinalizerMetadataRemainsReplayable() {
+        val source = Files.createTempDirectory("test-graph-closure-v2-compatible").toFile()
+        val traceId = "0123456789abcdef0123456789abcdef"
+        val expected = listOf("before", "selected")
+        RunReportWriter.persistExecutionScope(source, graphName, expected)
+        writePassingEnvelopes(source, expected, traceId)
+        writeTraceCarrier(source, traceId)
+        RunReportWriter.persistAttemptClosure(source, graphName, expected, traceId)
+
+        val closure = source.resolve("attempt-closure.json")
+        closure.writeText(
+            closure.readText()
+                .replaceFirst("\"version\":3", "\"version\":2")
+                .replace(",\"finalizerNodeIds\":[]", "")
+        )
+
+        RunReportWriter.requireReplaySource(source, graphName, "selected")
+    }
+
+    @Test
+    fun failedAttemptWithSkippedSuffixAndPassedFinalizerIsClosedAndReplayable() {
+        val source = Files.createTempDirectory("test-graph-finalizer-closure").toFile()
+        val traceId = "0123456789abcdef0123456789abcdef"
+        val expected = listOf("work.failed", "work.skipped", "work.cleanup")
+        RunReportWriter.persistExecutionScope(source, graphName, expected)
+        writePassingEnvelopes(source, expected, traceId)
+        source.resolve("envelope/work.failed.json").let { envelope ->
+            envelope.writeText(
+                envelope.readText().replace(
+                    "\"status\":\"passed\"",
+                    "\"status\":\"failed\",\"failureMessage\":\"expected fixture failure\"",
+                )
+            )
+        }
+        source.resolve("envelope/work.skipped.json").let { envelope ->
+            envelope.writeText(
+                envelope.readText().replace(
+                    "\"status\":\"passed\"",
+                    "\"status\":\"skipped\",\"failureMessage\":\"skipped after failure\"",
+                )
+            )
+        }
+        writeTraceCarrier(source, traceId)
+
+        RunReportWriter.persistAttemptClosure(
+            runDir = source,
+            graphName = graphName,
+            expectedNodeIds = expected,
+            traceId = traceId,
+            finalizerNodeIds = setOf("work.cleanup"),
+        )
+
+        val replay = RunReportWriter.requireReplaySource(
+            source,
+            graphName,
+            "work.failed",
+        )
+        assertEquals("work.failed", replay.selectedNodeId)
+        val closure = MiniJson.obj(
+            MiniJson.parse(source.resolve("attempt-closure.json").readText())
+        )
+        assertEquals(listOf("work.cleanup"), closure["finalizerNodeIds"])
     }
 
     @Test

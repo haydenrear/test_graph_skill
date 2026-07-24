@@ -1,6 +1,7 @@
 package com.hayden.testgraphsdk.exec
 
 import com.hayden.testgraphsdk.ValidationNodeSpec
+import com.hayden.testgraphsdk.isFinalizerNode
 import org.gradle.api.file.Directory
 import org.gradle.api.logging.Logger
 import java.io.File
@@ -362,10 +363,7 @@ class PlanExecutor(
         spec: ValidationNodeSpec,
         executed: Set<String>,
     ): Boolean =
-        isFinalizer(spec) && spec.dependsOn.all { it in executed }
-
-    private fun isFinalizer(spec: ValidationNodeSpec): Boolean =
-        spec.id.endsWith(".cleanup") || "finalizer" in spec.tags
+        spec.isFinalizerNode() && spec.dependsOn.all { it in executed }
 
     private fun writeSkippedEnvelope(
         spec: ValidationNodeSpec,

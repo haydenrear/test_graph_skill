@@ -75,6 +75,7 @@ internal object RunReportWriter {
         val runId: String,
         val traceId: String,
         val scope: ExecutionScope,
+        val finalizerNodeIds: List<String>,
         val scopeSha256: String,
         val carrierSha256: String,
         val contextSha256: Map<String, String>,
@@ -435,6 +436,7 @@ internal object RunReportWriter {
         expectedNodeIds: List<String>,
         traceId: String,
         replay: ReplayMetadata? = null,
+        finalizerNodeIds: Set<String> = emptySet(),
     ) {
         requireRegularDirectory(runDir, "attempt closure directory")
         require(isValidTraceId(traceId)) {
@@ -450,6 +452,13 @@ internal object RunReportWriter {
         require(persistedScope == requestedScope) {
             "attempt closure scope does not match the persisted execution scope"
         }
+        require(finalizerNodeIds.all(::isValidNodeId)) {
+            "attempt closure finalizer node ids must match [a-z0-9._-]{1,128}"
+        }
+        require(finalizerNodeIds.all(expectedNodeIds::contains)) {
+            "attempt closure finalizer node ids must belong to the execution scope"
+        }
+        val orderedFinalizerNodeIds = expectedNodeIds.filter(finalizerNodeIds::contains)
         val capturedCarrier = readBoundedUtf8RegularFile(
             File(runDir, TRACE_CARRIER_FILE),
             "attempt closure trace carrier",
@@ -463,6 +472,7 @@ internal object RunReportWriter {
             runDir = runDir,
             scope = persistedScope,
             traceId = traceId,
+            finalizerNodeIds = orderedFinalizerNodeIds.toSet(),
             aggregateBudget = AggregateJsonStructureBudget(
                 MAX_AGGREGATE_JSON_STRUCTURAL_TOKENS
             ),
@@ -472,6 +482,7 @@ internal object RunReportWriter {
                 runId = runDir.name,
                 traceId = traceId,
                 scope = persistedScope,
+                finalizerNodeIds = orderedFinalizerNodeIds,
                 scopeSha256 = capturedScope.sha256,
                 carrierSha256 = capturedCarrier.sha256,
                 contextSha256 = evidence.contextSha256,
@@ -494,6 +505,8 @@ internal object RunReportWriter {
         append(",\"runId\":").append(jsonString(closure.runId))
         append(",\"traceId\":").append(jsonString(closure.traceId))
         append(",\"scope\":").append(executionScopeJson(closure.scope).trim())
+        append(",\"finalizerNodeIds\":")
+        appendJsonStringArray(this, closure.finalizerNodeIds)
         append(",\"scopeSha256\":").append(jsonString(closure.scopeSha256))
         append(",\"carrierSha256\":").append(jsonString(closure.carrierSha256))
         append(",\"contextSha256\":")
@@ -509,11 +522,17 @@ internal object RunReportWriter {
         } catch (e: Exception) {
             throw IllegalArgumentException("invalid attempt closure: ${e.message}", e)
         }
-        require(obj.keys == ATTEMPT_CLOSURE_KEYS) {
-            "invalid attempt closure: unknown or missing fields"
-        }
-        require(obj["version"] == ATTEMPT_CLOSURE_VERSION.toLong()) {
+        val version = obj["version"]
+        require(version == 2L || version == ATTEMPT_CLOSURE_VERSION.toLong()) {
             "invalid attempt closure: unsupported version"
+        }
+        val expectedKeys = if (version == 2L) {
+            ATTEMPT_CLOSURE_V2_KEYS
+        } else {
+            ATTEMPT_CLOSURE_KEYS
+        }
+        require(obj.keys == expectedKeys) {
+            "invalid attempt closure: unknown or missing fields"
         }
         val runId = obj["runId"] as? String
             ?: throw IllegalArgumentException("invalid attempt closure: runId must be a string")
@@ -526,10 +545,38 @@ internal object RunReportWriter {
         val rawScope = obj["scope"] as? Map<String, Any?>
             ?: throw IllegalArgumentException("invalid attempt closure: scope must be an object")
         val scope = readExecutionScopeObject(rawScope, "invalid attempt closure scope")
+        val finalizerNodeIds = if (version == 2L) {
+            emptyList()
+        } else {
+            val rawFinalizers = obj["finalizerNodeIds"] as? List<*>
+                ?: throw IllegalArgumentException(
+                    "invalid attempt closure: finalizerNodeIds must be an array"
+                )
+            require(rawFinalizers.all { it is String }) {
+                "invalid attempt closure: finalizerNodeIds entries must be strings"
+            }
+            val parsedFinalizers = rawFinalizers.map { it as String }
+            require(parsedFinalizers.distinct().size == parsedFinalizers.size) {
+                "invalid attempt closure: finalizerNodeIds entries must be unique"
+            }
+            require(parsedFinalizers.all(::isValidNodeId)) {
+                "invalid attempt closure: finalizerNodeIds entries are invalid"
+            }
+            require(parsedFinalizers.all(scope.expectedNodeIds::contains)) {
+                "invalid attempt closure: finalizerNodeIds must belong to the execution scope"
+            }
+            require(
+                parsedFinalizers == scope.expectedNodeIds.filter(parsedFinalizers::contains)
+            ) {
+                "invalid attempt closure: finalizerNodeIds must follow execution-scope order"
+            }
+            parsedFinalizers
+        }
         return AttemptClosure(
             runId = runId,
             traceId = traceId,
             scope = scope,
+            finalizerNodeIds = finalizerNodeIds,
             scopeSha256 = requireSha256(obj["scopeSha256"], "scopeSha256"),
             carrierSha256 = requireSha256(obj["carrierSha256"], "carrierSha256"),
             contextSha256 = readEvidenceDigestMap(
@@ -598,6 +645,7 @@ internal object RunReportWriter {
             runDir = runDir,
             scope = expectedScope,
             traceId = closure.traceId,
+            finalizerNodeIds = closure.finalizerNodeIds.toSet(),
             aggregateBudget = AggregateJsonStructureBudget(
                 MAX_AGGREGATE_JSON_STRUCTURAL_TOKENS
             ),
@@ -673,6 +721,7 @@ internal object RunReportWriter {
             scope = sourceScope,
             traceId = capturedTraceId,
             selectedNodeId = selectedNodeId,
+            finalizerNodeIds = closure.finalizerNodeIds.toSet(),
             aggregateBudget = AggregateJsonStructureBudget(
                 MAX_AGGREGATE_JSON_STRUCTURAL_TOKENS
             ),
@@ -716,6 +765,7 @@ internal object RunReportWriter {
         scope: ExecutionScope,
         traceId: String,
         selectedNodeId: String? = null,
+        finalizerNodeIds: Set<String> = emptySet(),
         aggregateBudget: AggregateJsonStructureBudget,
     ): ClosedEvidenceSnapshot {
         val contextDirectory = runDir.toPath().resolve(CONTEXT_DIRECTORY)
@@ -753,6 +803,7 @@ internal object RunReportWriter {
         var selectedContext: List<ContextItem>? = null
         var aggregateContextBytes = 0L
         var aggregateEnvelopeBytes = 0L
+        var observedNonPassingEnvelope = false
 
         for ((index, nodeId) in contextNodes.withIndex()) {
             val contextRelative = "$CONTEXT_DIRECTORY/$nodeId$INPUT_CONTEXT_SUFFIX"
@@ -805,8 +856,21 @@ internal object RunReportWriter {
                 expectedTraceId = traceId,
                 aggregateBudget = aggregateBudget,
             )
-            require(envelope.status == "passed" || index == contextNodes.lastIndex) {
-                "closed attempt envelope '$nodeId' is non-passing but is not terminal"
+            if (envelope.status == "passed") {
+                require(!observedNonPassingEnvelope || nodeId in finalizerNodeIds) {
+                    "closed attempt envelope '$nodeId' passed after a non-passing " +
+                            "ordinary node but is not a finalizer"
+                }
+            } else {
+                require(
+                    !observedNonPassingEnvelope ||
+                            envelope.status == "skipped" ||
+                            nodeId in finalizerNodeIds
+                ) {
+                    "closed attempt envelope '$nodeId' is a second non-passing " +
+                            "ordinary node but was not skipped"
+                }
+                observedNonPassingEnvelope = true
             }
             envelopeDigests[envelopeRelative] = capturedEnvelope.sha256
             expectedContext += ContextItem(nodeId, envelope.published)
@@ -2132,7 +2196,7 @@ internal object RunReportWriter {
     private const val EXECUTION_SCOPE_FILE = "execution-scope.json"
     private const val EXECUTION_SCOPE_VERSION = 3
     private const val ATTEMPT_CLOSURE_FILE = "attempt-closure.json"
-    private const val ATTEMPT_CLOSURE_VERSION = 2
+    private const val ATTEMPT_CLOSURE_VERSION = 3
     private const val TRACE_CARRIER_FILE = "trace-context.json"
     private const val CONTEXT_DIRECTORY = "context"
     private const val ENVELOPE_DIRECTORY = "envelope"
@@ -2157,11 +2221,13 @@ internal object RunReportWriter {
         "runId",
         "traceId",
         "scope",
+        "finalizerNodeIds",
         "scopeSha256",
         "carrierSha256",
         "contextSha256",
         "envelopeSha256",
     )
+    private val ATTEMPT_CLOSURE_V2_KEYS = ATTEMPT_CLOSURE_KEYS - "finalizerNodeIds"
     private val VALID_NODE_STATUSES = setOf("passed", "failed", "errored", "skipped")
     private val TRACE_ID = Regex("^[0-9a-f]{32}$")
     private val SHA256 = Regex("^[0-9a-f]{64}$")
