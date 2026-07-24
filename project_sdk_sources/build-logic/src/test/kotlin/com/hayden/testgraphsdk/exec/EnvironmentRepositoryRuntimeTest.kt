@@ -38,7 +38,14 @@ class EnvironmentRepositoryRuntimeTest {
         assertEquals(first.identity.id, first.outputs["EnvironmentId"])
         assertEquals("test-graph-feature-a", first.outputs["KUBECONTEXT"])
 
-        val reuse = node("environment.reuse", source)
+        val ensured = runtime.execute(provision, state.prepare(provision))
+            ?: error("expected provision ensure execution")
+
+        assertTrue(ensured.reused)
+        assertTrue(ensured.commands.any { it.label == "tofu-apply" })
+        assertEquals(first.outputs["KUBECONFIG"], ensured.outputs["KUBECONFIG"])
+
+        val reuse = node("environment.reuse", source, "environment:reuse")
         val second = runtime.execute(reuse, state.prepare(reuse))
             ?: error("expected environment repository reuse")
 

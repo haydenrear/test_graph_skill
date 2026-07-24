@@ -78,7 +78,7 @@ internal class EnvironmentRepositoryRuntime(
             commands += runCommand(spec.id, "tofu-destroy", listOf(tofu, "destroy", "-auto-approve"), templateDir, commandEnv)
             emptyMap()
         } else {
-            if (shouldApply(actions, alreadyProvisioned)) {
+            if (shouldApply(actions)) {
                 commands += runCommand(spec.id, "tofu-apply", listOf(tofu, "apply", "-auto-approve"), templateDir, commandEnv)
             }
             val outputRecord = runCommand(
@@ -103,8 +103,8 @@ internal class EnvironmentRepositoryRuntime(
         )
     }
 
-    private fun shouldApply(actions: Set<String>, alreadyProvisioned: Boolean): Boolean =
-        "reset" in actions || ("provision" in actions && !alreadyProvisioned)
+    private fun shouldApply(actions: Set<String>): Boolean =
+        "reset" in actions || "provision" in actions
 
     private fun cloneOrReuseRepository(
         nodeId: String,
