@@ -6,12 +6,9 @@ build files, example node scripts, Gradle wrapper) into a new
 ``test_graph/`` subdirectory under the given repo root. The target
 ``test_graph/`` must not already exist or must be empty.
 
-The ``sdk/``, ``build-logic/``, and ``standard-nodes/`` subtrees are created
-as **symlinks** into the skill repo's ``project_sdk_sources/`` rather than
-copies, so upstream upgrades land in every consumer scaffold without rsync.
-Move or delete the skill repo and the symlinks dangle - that's the cost, and
-it's why the rest of the scaffold (sources/, build.gradle.kts, gradle wrapper,
-examples) stays as a copy: those are user-edited.
+The ``sdk/``, ``build-logic/``, and ``standard-nodes/`` subtrees are generated
+runtime bindings. Their portable provider manifest is committed; the symlinks
+themselves are ignored and are materialized by the Test Graph wrappers.
 
 Usage:
     scaffold.py <repo-root>
@@ -25,21 +22,23 @@ Example:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import stat
 import sys
 from pathlib import Path
 
-from _common import project_sdk_sources
+from _common import (
+    PROVIDER_BINDINGS,
+    ProviderBindingError,
+    ensure_provider_binding_ignores,
+    prepare_provider_bindings,
+    project_sdk_sources,
+    remove_provider_binding_ignores,
+    write_provider_bindings_manifest,
+)
 
 
-# Subtrees scaffolded as symlinks into the skill repo. Updating the
-# skill propagates instantly to every consumer scaffold - no manual
-# rsync, no drift between project copies. The flip side: a moved or
-# deleted skill repo dangles every consumer's symlink, so don't blow
-# away the skill checkout while a project depends on it.
-SYMLINK_TARGETS = {"sdk", "build-logic", "standard-nodes"}
+SYMLINK_TARGETS = set(PROVIDER_BINDINGS)
 PROVIDER_VALIDATION_BEGIN = "    // TEST-GRAPH-PROVIDER-VALIDATION-BEGIN\n"
 PROVIDER_VALIDATION_END = "    // TEST-GRAPH-PROVIDER-VALIDATION-END\n"
 
@@ -109,26 +108,10 @@ def main() -> int:
             "repo may be broken."
         )
 
-    symlinks_used: list[str] = []
     for child in src.iterdir():
         dest = target / child.name
         if child.name in SYMLINK_TARGETS and not args.copy_sdk:
-            # Absolute symlink so the scaffold remains valid no matter
-            # where the consumer cd's to. Resolve through `child` so a
-            # symlinked skill repo (e.g. one mounted into a container)
-            # still gets its real path stamped in.
-            try:
-                os.symlink(child.resolve(), dest, target_is_directory=child.is_dir())
-                symlinks_used.append(child.name)
-                continue
-            except OSError as e:
-                # Falling back to a copy keeps us working on Windows
-                # without developer-mode and on filesystems that reject
-                # symlinks (some FUSE mounts). Note loudly.
-                print(
-                    f"warning: could not symlink {child.name} (falling back to copy): {e}",
-                    file=sys.stderr,
-                )
+            continue
         if child.is_dir():
             shutil.copytree(child, dest, ignore=_ignore, dirs_exist_ok=False)
         else:
@@ -139,14 +122,36 @@ def main() -> int:
     if build_file.is_file():
         _remove_provider_validation_sections(build_file)
 
+    managed_bindings = False
+    if not args.copy_sdk:
+        try:
+            write_provider_bindings_manifest(target)
+            ensure_provider_binding_ignores(target)
+            prepare_provider_bindings(target)
+            managed_bindings = True
+        except (OSError, ProviderBindingError) as error:
+            print(
+                f"warning: could not create managed provider symlinks "
+                f"(falling back to copies): {error}",
+                file=sys.stderr,
+            )
+            for name in SYMLINK_TARGETS:
+                binding = target / name
+                if binding.is_symlink():
+                    binding.unlink()
+            (target / "provider-bindings.json").unlink(missing_ok=True)
+            remove_provider_binding_ignores(target)
+            for name in SYMLINK_TARGETS:
+                shutil.copytree(src / name, target / name, ignore=_ignore)
+
     gw = target / "gradlew"
     if gw.exists():
         gw.chmod(gw.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     print(f"scaffolded test_graph project at {target}")
-    if symlinks_used:
-        print(f"  symlinked into skill repo: {', '.join(sorted(symlinks_used))}")
-        print(f"  (changes to {src} take effect immediately in this scaffold)")
+    if managed_bindings:
+        print("  managed provider bindings: build-logic, sdk, standard-nodes")
+        print("  (provider-bindings.json is committed; generated links are ignored)")
     print()
     scripts = Path(__file__).resolve().parent
     print("next steps:")

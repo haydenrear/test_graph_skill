@@ -2,8 +2,9 @@
 
 Use `scripts/github-action.py` from an existing scaffolded project to add a
 GitHub Actions workflow that installs the test-graph skill with
-skill-manager, resolves the scaffold symlinks, discovers the graph, runs it,
-and uploads `test_graph/build/validation-reports/` as an artifact.
+skill-manager, prepares managed bindings (or repairs legacy symlinks),
+discovers the graph, runs it, and uploads
+`test_graph/build/validation-reports/` as an artifact.
 
 For the normal local workflow, start with [`workflows.md`](workflows.md).
 
@@ -40,7 +41,8 @@ directories in addition to `test_graph/**`.
 
 ## Why the Workflow Installs the Skill
 
-`scripts/scaffold.py` creates these scaffold entries as symlinks:
+New `scripts/scaffold.py` projects commit `provider-bindings.json` and generate
+these ignored runtime links:
 
 ```text
 test_graph/sdk
@@ -48,9 +50,10 @@ test_graph/build-logic
 test_graph/standard-nodes
 ```
 
-Those links point into the installed test-graph skill, not into the consuming
-project. A GitHub checkout only contains the symlink records. The runner must
-install the test-graph skill before Gradle can load the SDK and build logic.
+The GitHub checkout contains the portable manifest, not machine-specific
+symlink records. The runner installs the provider and `prepare-bindings.py`
+materializes the links before Gradle loads the SDK and build logic. Legacy
+committed links still use the repair path described below.
 
 The generated workflow does this in order:
 
@@ -58,7 +61,7 @@ The generated workflow does this in order:
 2. Prepare `SKILL_MANAGER_HOME`.
 3. Install `skill-manager`, JBang, and Python with Homebrew.
 4. Install the test-graph skill with `skill-manager install`.
-5. Resolve `test_graph/sdk`, `test_graph/build-logic`, and
+5. Prepare `test_graph/sdk`, `test_graph/build-logic`, and
    `test_graph/standard-nodes`.
 6. Run `discover.py` and `run.py`.
 7. Upload `test_graph/build/validation-reports/`.
@@ -71,8 +74,10 @@ Default mode is `repair`:
 <skill>/scripts/github-action.py --symlink-mode repair
 ```
 
-The workflow installs the skill at `/Users/runner/.skill-manager`, then
-rewrites the checkout symlinks in the Actions workspace to point at:
+For a managed project, the workflow runs `prepare-bindings.py`; unavailable
+workspace candidates fall back to the installed skill at
+`/Users/runner/.skill-manager`. For a legacy project, it rewrites checkout
+symlinks in the Actions workspace to point at:
 
 ```text
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/sdk
@@ -80,10 +85,10 @@ $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/build-logic
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/standard-nodes
 ```
 
-This is the most portable mode because it does not require the committed
-symlink targets to match the runner's filesystem.
+This is the portable mode because it does not require committed symlink targets
+to match the runner's filesystem.
 
-Use `preserve` when the checked-in symlinks already point under a fixed
+Use `preserve` only for a legacy project whose checked-in symlinks point under a fixed
 skill-manager home and you want the workflow to create that same location:
 
 ```bash
@@ -98,8 +103,9 @@ like:
 ```
 
 and the workflow validates that the checked-in symlinks resolve to the
-installed skill. Pass `--skill-manager-home <absolute-path>` if inference is
-not possible.
+installed skill. Managed `provider-bindings.json` projects reject preserve
+mode; use repair. Pass `--skill-manager-home <absolute-path>` if legacy
+inference is not possible.
 
 ## Private Installs
 

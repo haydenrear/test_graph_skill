@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Scaffold a GitHub Actions workflow for a test_graph project.
 
-The normal test_graph scaffold keeps ``test_graph/sdk``,
-``test_graph/build-logic``, and ``test_graph/standard-nodes`` as symlinks into
-the installed test-graph skill. A GitHub runner only works if those symlinks
-point at a real skill-manager install, so this script writes a workflow that
-installs the skill with skill-manager before running graph discovery and
-execution.
+Managed test_graph scaffolds commit ``provider-bindings.json`` and generate
+``test_graph/sdk``, ``test_graph/build-logic``, and
+``test_graph/standard-nodes`` at runtime. Legacy scaffolds keep committed
+symlinks. This script writes a workflow that supports both layouts after it
+installs the skill with skill-manager.
 
 Usage:
     github-action.py [repo-root]
@@ -220,6 +219,12 @@ def _skill_manager_home(override: str | None, mode: str, test_graph_root: Path) 
 
     if mode == "repair":
         return DEFAULT_SKILL_MANAGER_HOME
+
+    if (test_graph_root / "provider-bindings.json").is_file():
+        sys.exit(
+            "error: --symlink-mode preserve is only for legacy committed symlinks; "
+            "managed provider-bindings.json projects use --symlink-mode repair"
+        )
 
     inferred = _infer_skill_manager_home(test_graph_root)
     if inferred is None:
@@ -450,8 +455,13 @@ def _symlink_step(mode: str) -> list[str]:
             "",
         ]
     return [
-        "      - name: Point scaffold symlinks at installed skill",
+        "      - name: Prepare Test Graph provider bindings",
         "        run: |",
+        "          if [ -f \"$TEST_GRAPH_ROOT/provider-bindings.json\" ]; then",
+        "            \"$TEST_GRAPH_SKILL_HOME/scripts/prepare-bindings.py\" --test-graph-root \"$TEST_GRAPH_ROOT\"",
+        "            exit 0",
+        "          fi",
+        "          # Legacy compatibility; migrate-bindings.py removes the need for this branch.",
         "          relink() {",
         "            name=\"$1\"",
         "            link=\"$TEST_GRAPH_ROOT/$name\"",

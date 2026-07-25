@@ -511,22 +511,49 @@ Concrete examples are in:
 - `templates/uv-node.py.template`
 - `project_sdk_sources/build.gradle.kts`
 
-## Symlinked Shared Infrastructure
+## Managed Shared Infrastructure
 
-`scaffold.py` creates these as symlinks into this skill repo by default:
+New scaffolds commit `test_graph/provider-bindings.json` and ignore these
+generated runtime links:
 
 ```text
-<repo>/test_graph/sdk -> <skill>/project_sdk_sources/sdk
-<repo>/test_graph/build-logic -> <skill>/project_sdk_sources/build-logic
-<repo>/test_graph/standard-nodes -> <skill>/project_sdk_sources/standard-nodes
+<repo>/test_graph/sdk
+<repo>/test_graph/build-logic
+<repo>/test_graph/standard-nodes
 ```
 
-Do not edit those paths from inside a consumer scaffold. Real SDK, plugin, or
-standard-node changes belong in `project_sdk_sources/sdk/`,
-`project_sdk_sources/build-logic/`, and
-`project_sdk_sources/standard-nodes/` in this repo.
+`discover.py` and `run.py` materialize the links before Gradle starts. A
+`workspace-relative` provider candidate is tried first when present, followed
+by the skill checkout running the wrapper. Workspace links are relative;
+installed-skill links are absolute runtime details. The manifest and provider
+content are durable. Literal symlink text is not.
 
-Use `scaffold.py --copy-sdk` only when symlinks are not viable. That creates a
+Legacy committed symlinks remain supported and are never rewritten
+automatically. The next `discover.py` or `run.py` invocation prints a migration
+notice on stderr. Migrate explicitly from the consuming repository with:
+
+```bash
+<skill>/scripts/migrate-bindings.py
+```
+
+For an integration repository whose Test Graph provider is a sibling, add the
+portable first choice relative to `<consumer>/test_graph/`:
+
+```bash
+<skill>/scripts/migrate-bindings.py --workspace-provider ../../test_graph
+```
+
+Migration refuses real copied directories, adds the manifest and ignore rules,
+and stages removal of only the three generated links from Git's index. Review
+and commit those changes. `prepare-bindings.py` is the explicit idempotent
+materialization command; normal wrapper use does not require calling it.
+
+Do not edit generated binding paths from inside a consumer scaffold. Real SDK,
+plugin, or standard-node changes belong in `project_sdk_sources/sdk/`,
+`project_sdk_sources/build-logic/`, and `project_sdk_sources/standard-nodes/`
+in the provider repository.
+
+Use `scaffold.py --copy-sdk` only when managed symlinks are not viable. That creates a
 snapshot copy, so future upstream changes require re-scaffolding or manual sync.
 
 ## GitHub Actions

@@ -23,6 +23,7 @@ import sys
 from _common import (
     add_test_graph_root_arg,
     gradle_env_with_daemon_disabled,
+    prepare_provider_bindings_or_warn,
     run_gradle,
     target_project_root,
 )
@@ -30,6 +31,7 @@ from _common import (
 
 def _gradlew_cmd(root_override: str | None) -> tuple[list[str], "Path"]:
     root = target_project_root(root_override)
+    prepare_provider_bindings_or_warn(root)
     gw = root / "gradlew"
     return ([str(gw)] if gw.exists() else ["gradle"]), root
 

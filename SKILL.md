@@ -26,6 +26,8 @@ Use the skill scripts first. They auto-detect the active scaffolded `<repo>/test
 | Goal | Command |
 | --- | --- |
 | Scaffold into a repo | `<skill>/scripts/scaffold.py <repo-root>` |
+| Prepare managed provider bindings | `<skill>/scripts/prepare-bindings.py` |
+| Migrate legacy provider symlinks | `<skill>/scripts/migrate-bindings.py` |
 | List registered graphs | `<skill>/scripts/discover.py` |
 | Plan one graph and render `docs/<graph>.dot` / `.png` | `<skill>/scripts/discover.py <graph>` |
 | Run one graph | `<skill>/scripts/run.py <graph>` |
@@ -119,7 +121,7 @@ Do not hide setup inside assertion nodes. If multiple graphs need the same app/d
 
 ## Editing Rules
 
-- In a consumer scaffold, do not edit `sdk/`, `build-logic/`, or `standard-nodes/`. They are symlinks into `project_sdk_sources/` in this skill repo.
+- In a consumer scaffold, do not edit `sdk/`, `build-logic/`, or `standard-nodes/`. Managed projects generate and ignore those runtime links from the committed `provider-bindings.json`; legacy projects keep supported symlinks until an explicit `migrate-bindings.py` run.
 - Node scripts live in `<repo>/test_graph/sources/` and can import the user's real project code with paths relative to that file. From `sources/`, the user repo root is `../..`.
 - For Java nodes, use JBang `//SOURCES ../../src/main/java/...` and optional `//DEPS`.
 - For Python nodes, prefer uv inline metadata with `[tool.uv.sources]` pointing the user package at `../..`.

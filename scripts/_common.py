@@ -12,9 +12,11 @@ Two roots to keep straight:
 
        a. ``--test-graph-root`` flag
        b. ``TEST_GRAPH_ROOT`` env var
-       c. Walk up from cwd looking for ``settings.gradle.kts`` — the
-          scaffold marker. This wins when the user has cd'd into the
-          scaffolded project (or any of its subdirs).
+       c. Walk up from cwd looking for the scaffold markers:
+          ``settings.gradle.kts`` plus a ``build.gradle.kts`` containing
+          ``validationGraph``. This wins when the user has cd'd into the
+          scaffolded project (or any of its subdirs), without mistaking a
+          consuming Gradle repository root for the Test Graph root.
        d. Fall back to ``<cwd>/test_graph/`` if it carries both
           ``settings.gradle.kts`` and a ``build.gradle.kts`` that
           mentions ``validationGraph``. This is the "running from the
@@ -28,14 +30,27 @@ projects without path guessing or per-invocation flags.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"}
+
+PROVIDER_BINDINGS_SCHEMA = "test-graph.provider-bindings.v1"
+PROVIDER_BINDINGS_MANIFEST = "provider-bindings.json"
+PROVIDER_BINDINGS = {
+    "build-logic": "project_sdk_sources/build-logic",
+    "sdk": "project_sdk_sources/sdk",
+    "standard-nodes": "project_sdk_sources/standard-nodes",
+}
+PROVIDER_BINDING_IGNORE_BEGIN = "# TEST-GRAPH-MANAGED-BINDINGS-BEGIN"
+PROVIDER_BINDING_IGNORE_END = "# TEST-GRAPH-MANAGED-BINDINGS-END"
+_WARNED_LEGACY_BINDING_ROOTS: set[Path] = set()
 
 _GRADLE_MEMORY_GUARDS = (
     "--no-daemon",
@@ -157,8 +172,7 @@ def target_project_root(override: str | Path | None = None) -> Path:
     1. ``override`` argument (typically ``--test-graph-root`` on a
        script).
     2. ``TEST_GRAPH_ROOT`` environment variable.
-    3. Walk up from cwd looking for ``settings.gradle.kts`` — the
-       scaffold marker.
+    3. Walk up from cwd looking for the complete Test Graph scaffold markers.
     4. Fall back to ``<cwd>/test_graph/`` when it carries
        ``settings.gradle.kts`` AND a ``build.gradle.kts`` containing
        the literal ``validationGraph`` (the DSL entry point); this is
@@ -184,10 +198,11 @@ def target_project_root(override: str | Path | None = None) -> Path:
 
     cwd = Path.cwd().resolve()
 
-    # (3) Walk up — wins when the user is anywhere inside a scaffold.
+    # (3) Walk up — wins when the user is anywhere inside a scaffold. An
+    # ordinary consuming Gradle root is not itself a Test Graph root.
     cur = cwd
     while True:
-        if (cur / "settings.gradle.kts").is_file():
+        if _looks_like_test_graph_root(cur):
             return cur
         if cur.parent == cur:
             break
@@ -230,6 +245,243 @@ def _looks_like_test_graph_root(candidate: Path) -> bool:
 def target_sources_dir(override: str | Path | None = None) -> Path:
     """`sources/` inside the active scaffolded project."""
     return target_project_root(override) / "sources"
+
+
+class ProviderBindingError(RuntimeError):
+    """A managed provider binding is invalid or cannot be materialized."""
+
+
+def provider_bindings_manifest(test_graph_root: Path) -> Path:
+    return test_graph_root / PROVIDER_BINDINGS_MANIFEST
+
+
+def provider_bindings_document(
+    workspace_provider: str | None = None,
+) -> dict[str, object]:
+    candidates: list[dict[str, str]] = []
+    if workspace_provider is not None:
+        provider_path = Path(workspace_provider)
+        if provider_path.is_absolute():
+            raise ProviderBindingError(
+                "workspace provider must be relative to the test_graph root"
+            )
+        candidates.append(
+            {"kind": "workspace-relative", "path": provider_path.as_posix()}
+        )
+    candidates.append({"kind": "skill-root"})
+    return {
+        "schema_version": PROVIDER_BINDINGS_SCHEMA,
+        "provider_candidates": candidates,
+        "bindings": dict(PROVIDER_BINDINGS),
+    }
+
+
+def write_provider_bindings_manifest(
+    test_graph_root: Path,
+    *,
+    workspace_provider: str | None = None,
+) -> Path:
+    """Write the strict managed-binding manifest atomically."""
+
+    destination = provider_bindings_manifest(test_graph_root)
+    document = provider_bindings_document(workspace_provider)
+    payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=test_graph_root,
+        prefix=f".{PROVIDER_BINDINGS_MANIFEST}.",
+        delete=False,
+    ) as handle:
+        handle.write(payload)
+        temporary = Path(handle.name)
+    os.replace(temporary, destination)
+    return destination
+
+
+def ensure_provider_binding_ignores(test_graph_root: Path) -> Path:
+    """Ignore generated binding paths without disturbing project rules."""
+
+    ignore_path = test_graph_root / ".gitignore"
+    existing = ignore_path.read_text(encoding="utf-8") if ignore_path.exists() else ""
+    block = "\n".join(
+        [
+            PROVIDER_BINDING_IGNORE_BEGIN,
+            "# Generated runtime links; provider-bindings.json is the durable record.",
+            "/build-logic",
+            "/sdk",
+            "/standard-nodes",
+            PROVIDER_BINDING_IGNORE_END,
+        ]
+    )
+    if PROVIDER_BINDING_IGNORE_BEGIN in existing:
+        if existing.count(PROVIDER_BINDING_IGNORE_BEGIN) != 1 or existing.count(
+            PROVIDER_BINDING_IGNORE_END
+        ) != 1:
+            raise ProviderBindingError(
+                f"managed binding ignore markers are malformed in {ignore_path}"
+            )
+        before, remainder = existing.split(PROVIDER_BINDING_IGNORE_BEGIN, 1)
+        _old, after = remainder.split(PROVIDER_BINDING_IGNORE_END, 1)
+        updated = before.rstrip() + "\n\n" + block + after
+    else:
+        updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + block + "\n"
+    ignore_path.write_text(updated, encoding="utf-8")
+    return ignore_path
+
+
+def remove_provider_binding_ignores(test_graph_root: Path) -> None:
+    """Remove only the generated ignore block after a scaffold fallback."""
+
+    ignore_path = test_graph_root / ".gitignore"
+    if not ignore_path.exists():
+        return
+    existing = ignore_path.read_text(encoding="utf-8")
+    if PROVIDER_BINDING_IGNORE_BEGIN not in existing:
+        return
+    if existing.count(PROVIDER_BINDING_IGNORE_BEGIN) != 1 or existing.count(
+        PROVIDER_BINDING_IGNORE_END
+    ) != 1:
+        raise ProviderBindingError(
+            f"managed binding ignore markers are malformed in {ignore_path}"
+        )
+    before, remainder = existing.split(PROVIDER_BINDING_IGNORE_BEGIN, 1)
+    _old, after = remainder.split(PROVIDER_BINDING_IGNORE_END, 1)
+    ignore_path.write_text((before.rstrip() + after).rstrip() + "\n", encoding="utf-8")
+
+
+def load_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
+    manifest = provider_bindings_manifest(test_graph_root)
+    if not manifest.exists():
+        return None
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ProviderBindingError(f"provider binding manifest must be a file: {manifest}")
+    if manifest.stat().st_size > 64 * 1024:
+        raise ProviderBindingError(f"provider binding manifest is too large: {manifest}")
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ProviderBindingError(
+            f"cannot read provider binding manifest {manifest}: {error}"
+        ) from error
+    if not isinstance(document, dict):
+        raise ProviderBindingError("provider binding manifest must be a JSON object")
+    if set(document) != {"schema_version", "provider_candidates", "bindings"}:
+        raise ProviderBindingError("provider binding manifest has unknown fields")
+    if document.get("schema_version") != PROVIDER_BINDINGS_SCHEMA:
+        raise ProviderBindingError("provider binding manifest schema is unsupported")
+    if document.get("bindings") != PROVIDER_BINDINGS:
+        raise ProviderBindingError("provider binding manifest must declare the exact bindings")
+    candidates = document.get("provider_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ProviderBindingError("provider binding manifest has no provider candidates")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ProviderBindingError("provider candidate must be an object")
+        kind = candidate.get("kind")
+        if kind == "skill-root":
+            if set(candidate) != {"kind"}:
+                raise ProviderBindingError("skill-root provider candidate has unknown fields")
+        elif kind == "workspace-relative":
+            path = candidate.get("path")
+            if set(candidate) != {"kind", "path"} or not isinstance(path, str) or not path:
+                raise ProviderBindingError("workspace provider candidate is invalid")
+            if Path(path).is_absolute():
+                raise ProviderBindingError("workspace provider candidate must be relative")
+        else:
+            raise ProviderBindingError(f"unsupported provider candidate kind: {kind!r}")
+    return document
+
+
+def prepare_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
+    """Materialize a managed scaffold from the first complete provider."""
+
+    root = test_graph_root.resolve()
+    document = load_provider_bindings(root)
+    if document is None:
+        return None
+    selected_kind: str | None = None
+    selected_root: Path | None = None
+    for candidate in document["provider_candidates"]:
+        assert isinstance(candidate, dict)
+        kind = str(candidate["kind"])
+        if kind == "workspace-relative":
+            provider_root = (root / str(candidate["path"])).resolve()
+        else:
+            provider_root = skill_root().resolve()
+        if all((provider_root / relative).is_dir() for relative in PROVIDER_BINDINGS.values()):
+            selected_kind = kind
+            selected_root = provider_root
+            break
+    if selected_root is None or selected_kind is None:
+        raise ProviderBindingError(
+            f"no complete Test Graph provider is available for {root}; "
+            "install/update the test-graph skill or restore the workspace provider"
+        )
+
+    real_paths = [
+        root / name
+        for name in sorted(PROVIDER_BINDINGS)
+        if (root / name).exists() and not (root / name).is_symlink()
+    ]
+    if real_paths:
+        raise ProviderBindingError(
+            "managed binding refuses to replace real paths: "
+            + ", ".join(str(path) for path in real_paths)
+        )
+
+    materialized: dict[str, dict[str, str]] = {}
+    for name, provider_relative in sorted(PROVIDER_BINDINGS.items()):
+        destination = root / name
+        source = (selected_root / provider_relative).resolve(strict=True)
+        if selected_kind == "workspace-relative":
+            target = os.path.relpath(source, destination.parent)
+        else:
+            target = str(source)
+        if destination.is_symlink():
+            current = os.readlink(destination)
+            if current == target and destination.resolve(strict=True) == source:
+                materialized[name] = {
+                    "provider_relative": provider_relative,
+                    "target": target,
+                }
+                continue
+            destination.unlink()
+        os.symlink(target, destination, target_is_directory=True)
+        materialized[name] = {
+            "provider_relative": provider_relative,
+            "target": target,
+        }
+    return {
+        "schema_version": PROVIDER_BINDINGS_SCHEMA,
+        "provider": {"kind": selected_kind, "root": str(selected_root)},
+        "bindings": materialized,
+    }
+
+
+def prepare_provider_bindings_or_warn(test_graph_root: Path) -> None:
+    """Prepare managed bindings, or notify a legacy scaffold without changing it."""
+
+    root = test_graph_root.resolve()
+    try:
+        document = load_provider_bindings(root)
+        if document is not None:
+            prepare_provider_bindings(root)
+            return
+    except ProviderBindingError as error:
+        sys.exit(f"error: {error}")
+    legacy_links = [name for name in PROVIDER_BINDINGS if (root / name).is_symlink()]
+    if legacy_links and root not in _WARNED_LEGACY_BINDING_ROOTS:
+        _WARNED_LEGACY_BINDING_ROOTS.add(root)
+        print(
+            "notice: legacy Test Graph provider symlinks remain supported; "
+            "migrate when ready with:\n"
+            f"  {skill_root() / 'scripts' / 'migrate-bindings.py'} "
+            f"--test-graph-root {root}\n"
+            "  Migration is explicit: it adds a portable provider manifest, "
+            "untracks only the three generated links, and leaves copied SDK paths alone.",
+            file=sys.stderr,
+        )
 
 
 def add_test_graph_root_arg(parser: argparse.ArgumentParser) -> None:
@@ -287,6 +539,7 @@ def run_gradle(args: list[str], test_graph_root: str | Path | None = None) -> in
     ``test_graph_root`` override as :func:`target_project_root`.
     """
     root = target_project_root(test_graph_root)
+    prepare_provider_bindings_or_warn(root)
     gradlew = root / "gradlew"
     executable = str(gradlew) if gradlew.exists() else "gradle"
     cmd = [executable, *_bounded_gradle_args(args)]
