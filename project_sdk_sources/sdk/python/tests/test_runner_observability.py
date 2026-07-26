@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import time
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from testgraphsdk import NodeResult, NodeSpec
 from testgraphsdk import runner
+
+
+@pytest.fixture(autouse=True)
+def _replace_terminal_process_exit(monkeypatch):
+    def exit_process(status: int):
+        raise SystemExit(status)
+
+    monkeypatch.setattr(runner, "_exit_process", exit_process)
 
 
 def _spec() -> NodeSpec:
@@ -126,4 +139,56 @@ def test_telemetry_failures_do_not_replace_the_node_result(monkeypatch, tmp_path
         wrapped()
 
     assert exit_info.value.code == 0
+    assert '"status": "passed"' in result_out.read_text()
+
+
+def test_finite_node_process_exits_when_otlp_is_unavailable(tmp_path):
+    result_out = tmp_path / "result.json"
+    script = tmp_path / "probe.py"
+    script.write_text(
+        """\
+from testgraphsdk import NodeResult, NodeSpec, node
+
+
+@node(NodeSpec("probe").kind("evidence").timeout("30s"))
+def run(ctx):
+    return NodeResult.pass_(ctx.node_id)
+
+
+run()
+"""
+    )
+    sdk_src = Path(__file__).parents[1] / "src"
+    env = os.environ.copy()
+    env.update(
+        {
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
+            "PYTHONPATH": os.pathsep.join(
+                value
+                for value in (str(sdk_src), env.get("PYTHONPATH"))
+                if value
+            ),
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+
+    started = time.monotonic()
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--nodeId=probe",
+            "--runId=run-1",
+            f"--reportDir={tmp_path}",
+            f"--result-out={result_out}",
+        ],
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=9,
+    )
+    elapsed = time.monotonic() - started
+
+    assert completed.returncode == 0, completed.stderr
+    assert elapsed < 7.5
     assert '"status": "passed"' in result_out.read_text()

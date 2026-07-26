@@ -23,7 +23,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from threading import Event, Thread
+from typing import Any, Callable, NoReturn
 
 from opentelemetry.context import attach, detach
 from tracing_skill_observability import (
@@ -38,6 +39,8 @@ from tracing_skill_observability import (
 from .context import NodeContext
 from .node_spec import NodeSpec
 from .result import NodeResult
+
+_OBSERVABILITY_FLUSH_TIMEOUT_MILLIS = 5_000
 
 
 def node(spec: NodeSpec) -> Callable[[Callable[[NodeContext], NodeResult]], Callable[[], None]]:
@@ -90,20 +93,56 @@ def node(spec: NodeSpec) -> Callable[[Callable[[NodeContext], NodeResult]], Call
                         detach(parent_token)
                     except Exception:
                         pass
-                # One bounded terminal request per finite node process.
-                try:
-                    flush_observability(timeout_millis=5_000)
-                except Exception:
-                    pass
-            # Exit 0 regardless of status: the executor decides pass/fail
-            # from the parsed envelope's status field. Mirrors the Java
-            # SDK's policy.
-            sys.exit(0)
+                _flush_observability_before_exit(
+                    timeout_millis=_OBSERVABILITY_FLUSH_TIMEOUT_MILLIS,
+                )
+            # The structured result is durable now. Use a terminal process exit
+            # so third-party atexit hooks cannot turn an unavailable telemetry
+            # backend into an unbounded successful-node shutdown.
+            _exit_process(0)
 
         wrapper.__wrapped__ = body  # type: ignore[attr-defined]
         return wrapper
 
     return decorate
+
+
+def _flush_observability_before_exit(*, timeout_millis: int) -> bool:
+    """Give telemetry one hard-bounded, fail-open terminal flush opportunity."""
+
+    complete = Event()
+    outcome = {"success": False}
+
+    def flush() -> None:
+        try:
+            outcome["success"] = bool(
+                flush_observability(timeout_millis=timeout_millis)
+            )
+        except Exception:
+            pass
+        finally:
+            complete.set()
+
+    try:
+        Thread(
+            target=flush,
+            name="test-graph-node-observability-flush",
+            daemon=True,
+        ).start()
+    except Exception:
+        return False
+    if not complete.wait(timeout=max(0, timeout_millis) / 1_000):
+        return False
+    return bool(outcome["success"])
+
+
+def _exit_process(status: int) -> NoReturn:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    os._exit(status)
 
 
 def _configure_node_observability(spec: NodeSpec) -> tuple[object | None, dict[str, Any]]:

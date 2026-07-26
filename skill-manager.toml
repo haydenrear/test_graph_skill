@@ -28,5 +28,5 @@ skill_references = [
 
 [skill]
 name = "test-graph"
-version = "0.2.0"
+version = "0.2.1"
 description = "Scaffold a portable test_graph project, manage provider bindings, add JBang/uv validation nodes, compose graphs, run them, and aggregate reports."
