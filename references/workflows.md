@@ -513,18 +513,39 @@ Concrete examples are in:
 
 ## Symlinked Shared Infrastructure
 
-`scaffold.py` creates these as symlinks into this skill repo by default:
+`scaffold.py` creates these as symlinks by default. The targets are always
+**relative** and always land inside the consuming tree - normally the project's
+own `.skill-manager` home:
 
 ```text
-<repo>/test_graph/sdk -> <skill>/project_sdk_sources/sdk
-<repo>/test_graph/build-logic -> <skill>/project_sdk_sources/build-logic
-<repo>/test_graph/standard-nodes -> <skill>/project_sdk_sources/standard-nodes
+<repo>/test_graph/sdk            -> ../.skill-manager/skills/test-graph/project_sdk_sources/sdk
+<repo>/test_graph/build-logic    -> ../.skill-manager/skills/test-graph/project_sdk_sources/build-logic
+<repo>/test_graph/standard-nodes -> ../.skill-manager/skills/test-graph/project_sdk_sources/standard-nodes
 ```
+
+The `../` count is computed, not templated. A consumer can sit any distance
+below the home that owns it - `meta-orchestrator/constituents/stream-lite` is
+two integration levels down and gets `../../../.skill-manager/...`.
+
+These links get committed, which is why they are never absolute. An absolute
+target baked in at scaffold time points at whatever `SKILL_MANAGER_HOME` named
+on the machine that ran the scaffolder; everywhere else - CI, every other
+developer - it dangles, and no environment override (`SKILL_MANAGER_HOME`,
+`-Duser.home`) can redirect a path already frozen into a Git blob.
+
+Resolution order:
+
+1. A copy of `project_sdk_sources/` already inside `<repo>` (this skill's own
+   nested `test_graph/`, or a repo that vendors the skill checkout).
+2. The nearest `.skill-manager` home at or above `<repo>`.
+3. Neither: `scaffold.py` **refuses**. Create the project home first, or pass
+   `--copy-sdk`. It will not fall back to an absolute link.
 
 Do not edit those paths from inside a consumer scaffold. Real SDK, plugin, or
 standard-node changes belong in `project_sdk_sources/sdk/`,
 `project_sdk_sources/build-logic/`, and
-`project_sdk_sources/standard-nodes/` in this repo.
+`project_sdk_sources/standard-nodes/` in this repo, and reach the consumer
+through `skill-manager sync` into its home.
 
 Use `scaffold.py --copy-sdk` only when symlinks are not viable. That creates a
 snapshot copy, so future upstream changes require re-scaffolding or manual sync.

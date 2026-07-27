@@ -96,6 +96,9 @@ jobs:
         working-directory: project_sdk_sources
         run: ./gradlew --console=plain :build-logic:test
 
+      - name: Run script unit tests
+        run: python -m unittest discover -s scripts/tests -v
+
       - name: Run spec pytest suite
         run: pytest specs/program_model/tests
 

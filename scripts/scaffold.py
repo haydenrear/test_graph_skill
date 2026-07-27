@@ -7,11 +7,18 @@ build files, example node scripts, Gradle wrapper) into a new
 ``test_graph/`` must not already exist or must be empty.
 
 The ``sdk/``, ``build-logic/``, and ``standard-nodes/`` subtrees are created
-as **symlinks** into the skill repo's ``project_sdk_sources/`` rather than
-copies, so upstream upgrades land in every consumer scaffold without rsync.
-Move or delete the skill repo and the symlinks dangle - that's the cost, and
-it's why the rest of the scaffold (sources/, build.gradle.kts, gradle wrapper,
-examples) stays as a copy: those are user-edited.
+as **symlinks** rather than copies, so upstream upgrades land in every consumer
+scaffold without rsync. That's why the rest of the scaffold (sources/,
+build.gradle.kts, gradle wrapper, examples) stays as a copy: those are
+user-edited.
+
+Those symlinks are always **relative**, and always point at a copy of
+``project_sdk_sources/`` that lives inside the consuming tree - either the
+project's own ``.skill-manager`` home or a skill checkout vendored in the repo.
+They are never absolute and never leave the tree, because they get committed:
+an absolute link baked in at scaffold time only resolves on the machine that
+ran the scaffolder, and no environment override (``SKILL_MANAGER_HOME``,
+``-Duser.home``) can redirect a path that is already stamped into a Git blob.
 
 Usage:
     scaffold.py <repo-root>
@@ -20,7 +27,8 @@ Usage:
 Example:
     scaffold.py ~/projects/myapp
         creates ~/projects/myapp/test_graph/ populated with the scaffold;
-        sdk/, build-logic/, and standard-nodes/ symlink into the skill repo.
+        sdk/, build-logic/, and standard-nodes/ become relative symlinks into
+        ~/projects/myapp/.skill-manager/skills/test-graph/project_sdk_sources/.
 """
 from __future__ import annotations
 
@@ -34,12 +42,20 @@ from pathlib import Path
 from _common import project_sdk_sources
 
 
-# Subtrees scaffolded as symlinks into the skill repo. Updating the
-# skill propagates instantly to every consumer scaffold - no manual
-# rsync, no drift between project copies. The flip side: a moved or
-# deleted skill repo dangles every consumer's symlink, so don't blow
-# away the skill checkout while a project depends on it.
+# Subtrees scaffolded as symlinks rather than copies. Updating the skill
+# propagates instantly to every consumer scaffold - no manual rsync, no
+# drift between project copies. The flip side: remove the skill from the
+# project's home and every consumer symlink dangles, so re-run
+# `skill-manager sync` rather than deleting the vendored skill.
 SYMLINK_TARGETS = {"sdk", "build-logic", "standard-nodes"}
+
+# Directory name of a skill-manager home. Each checkout owns one; see the
+# git-integration-repo skill's references/skill-homes.md.
+HOME_DIRNAME = ".skill-manager"
+
+# Where a skill-manager home vendors this skill's scaffold sources.
+VENDORED_SDK_SOURCES = Path("skills") / "test-graph" / "project_sdk_sources"
+
 PROVIDER_VALIDATION_BEGIN = "    // TEST-GRAPH-PROVIDER-VALIDATION-BEGIN\n"
 PROVIDER_VALIDATION_END = "    // TEST-GRAPH-PROVIDER-VALIDATION-END\n"
 
@@ -53,6 +69,95 @@ def _ignore(dirname: str, names: list[str]) -> list[str]:
         elif name.endswith(".egg-info"):
             skip.add(name)
     return list(skip)
+
+
+def nearest_enclosing_home(start: Path) -> Path | None:
+    """Nearest ``.skill-manager`` home at or above ``start``.
+
+    Walked, never templated. A consumer can sit at any depth below the
+    home that owns it: ``meta-orchestrator/constituents/stream-lite`` is
+    two integration levels down, so a hardcoded ``../`` count cannot
+    express the distance. Walking up and then taking ``os.path.relpath``
+    from the link's own directory is the only formulation that is right
+    at every depth.
+
+    The returned path is *not* resolved. If ``.skill-manager`` is itself
+    a symlink we still want to route through the project-local name, so
+    the committed link stays inside the project tree.
+    """
+    current = start
+    while True:
+        candidate = current / HOME_DIRNAME
+        if candidate.is_dir():
+            return candidate
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def symlink_source_root(repo_root: Path, src: Path) -> Path:
+    """Directory the scaffold's symlinks must point into.
+
+    Two ways a consuming tree can own a copy of ``project_sdk_sources/``:
+
+    1. The skill checkout is already inside ``repo_root`` (this skill's
+       own nested ``test_graph/``, or a repo that vendors the checkout).
+       Point straight at it.
+    2. A ``.skill-manager`` home encloses ``repo_root``. Point at the
+       copy that home vendors.
+
+    What is deliberately ignored: ``src`` when it sits *outside* the
+    tree. That is where the bug came from - ``project_sdk_sources()``
+    resolves against whatever ``SKILL_MANAGER_HOME`` pointed at when the
+    scaffolder ran, in practice the operator's global home, and that
+    absolute path then got committed. Where the scaffolder happens to be
+    installed is not a property of the project being scaffolded.
+    """
+    if src.is_relative_to(repo_root):
+        return src
+
+    home = nearest_enclosing_home(repo_root)
+    if home is None:
+        # Chosen fallback: refuse. The alternative - keep writing the
+        # absolute path and print a warning - is not a fallback, it is
+        # the defect with a log line attached. The link is committed, so
+        # a warning is seen once by the person who already has a working
+        # machine and never by the people the broken link reaches (CI,
+        # every other developer). Nothing downstream can repair it:
+        # neither SKILL_MANAGER_HOME nor -Duser.home can redirect a path
+        # frozen into a Git blob, which is why test isolation was
+        # structurally unachievable and Gradle wrote build state into the
+        # operator's real home on every graph run. Failing here costs one
+        # command; succeeding wrongly costs a repo-wide symlink repair.
+        sys.exit(
+            f"error: no {HOME_DIRNAME}/ home encloses {repo_root}, and the "
+            f"test-graph skill is not vendored inside it.\n"
+            f"  sdk/, build-logic/, and standard-nodes/ are committed symlinks. "
+            f"They must resolve inside the project tree or the checkout only "
+            f"builds on this machine.\n"
+            f"  Fix by either:\n"
+            f"    1. creating the project's own home first, then re-running:\n"
+            f"         SKILL_MANAGER_HOME={repo_root / HOME_DIRNAME} \\\n"
+            f"           skill-manager install github:haydenrear/test_graph_skill\n"
+            f"    2. re-running with --copy-sdk for a self-contained snapshot "
+            f"(no symlinks, no upstream propagation)."
+        )
+
+    vendored = home / VENDORED_SDK_SOURCES
+    if not vendored.is_dir():
+        # Emitted anyway: the shape is already correct for this project,
+        # and `skill-manager sync` against the project home populates it.
+        # Refusing here would make scaffolding order-dependent for no
+        # correctness gain - unlike the no-home case, nothing absolute is
+        # being written.
+        print(
+            f"warning: {vendored} does not exist yet - the scaffold's symlinks "
+            f"will dangle until the test-graph skill is installed into "
+            f"{home}.\n"
+            f"  SKILL_MANAGER_HOME={home} skill-manager sync",
+            file=sys.stderr,
+        )
+    return vendored
 
 
 def _remove_provider_validation_sections(build_file: Path) -> None:
@@ -100,25 +205,30 @@ def main() -> int:
             f"error: {target} already exists and is not empty.\n"
             "  remove or empty it first, then re-run."
         )
-    target.mkdir(parents=True, exist_ok=True)
 
-    src = project_sdk_sources()
+    src = project_sdk_sources().resolve()
     if not src.is_dir():
         sys.exit(
             f"error: project_sdk_sources/ not found at {src} - this skill "
             "repo may be broken."
         )
 
+    # Resolved before anything is written, so a refusal leaves no
+    # half-scaffolded test_graph/ behind.
+    link_root = src if args.copy_sdk else symlink_source_root(repo_root, src)
+
+    target.mkdir(parents=True, exist_ok=True)
+
     symlinks_used: list[str] = []
     for child in src.iterdir():
         dest = target / child.name
         if child.name in SYMLINK_TARGETS and not args.copy_sdk:
-            # Absolute symlink so the scaffold remains valid no matter
-            # where the consumer cd's to. Resolve through `child` so a
-            # symlinked skill repo (e.g. one mounted into a container)
-            # still gets its real path stamped in.
+            # Relative to the link's own directory, so the whole scaffold
+            # can be moved, cloned, or checked out anywhere and the link
+            # still lands on the copy this project owns.
+            link_target = os.path.relpath(link_root / child.name, start=target)
             try:
-                os.symlink(child.resolve(), dest, target_is_directory=child.is_dir())
+                os.symlink(link_target, dest, target_is_directory=child.is_dir())
                 symlinks_used.append(child.name)
                 continue
             except OSError as e:
@@ -145,8 +255,8 @@ def main() -> int:
 
     print(f"scaffolded test_graph project at {target}")
     if symlinks_used:
-        print(f"  symlinked into skill repo: {', '.join(sorted(symlinks_used))}")
-        print(f"  (changes to {src} take effect immediately in this scaffold)")
+        print(f"  relative symlinks: {', '.join(sorted(symlinks_used))}")
+        print(f"  (into {link_root}; changes there take effect immediately)")
     print()
     scripts = Path(__file__).resolve().parent
     print("next steps:")

@@ -119,7 +119,7 @@ Do not hide setup inside assertion nodes. If multiple graphs need the same app/d
 
 ## Editing Rules
 
-- In a consumer scaffold, do not edit `sdk/`, `build-logic/`, or `standard-nodes/`. They are symlinks into `project_sdk_sources/` in this skill repo.
+- In a consumer scaffold, do not edit `sdk/`, `build-logic/`, or `standard-nodes/`. They are relative symlinks into the copy of `project_sdk_sources/` the project's own `.skill-manager` home carries; upstream changes belong in this skill repo and reach consumers through `skill-manager sync`. They are never absolute paths - those get committed and then resolve on exactly one machine.
 - Node scripts live in `<repo>/test_graph/sources/` and can import the user's real project code with paths relative to that file. From `sources/`, the user repo root is `../..`.
 - For Java nodes, use JBang `//SOURCES ../../src/main/java/...` and optional `//DEPS`.
 - For Python nodes, prefer uv inline metadata with `[tool.uv.sources]` pointing the user package at `../..`.

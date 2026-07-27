@@ -18,6 +18,14 @@ the runner's installed test-graph skill. Use ``--symlink-mode preserve``
 when the checked-in symlink target already points under a fixed
 ``$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources`` path and
 you want the runner to create that same home.
+
+``scaffold.py`` emits **relative** links into the project's own
+``.skill-manager`` home, so in preserve mode the inferred home usually sits
+inside the checkout. That home is emitted as ``${{ github.workspace }}/...``
+and the runner installs the skill into it, which is the point: the committed
+links then resolve on the runner for the same reason they resolve on a
+developer's machine, with nothing rewritten. Preserve mode validates that
+shape - link is relative, and resolves to the installed skill.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from _common import target_project_root
 DEFAULT_WORKFLOW = "test-graph.yml"
 DEFAULT_SKILL_COORDINATE = "github:haydenrear/test_graph_skill"
 DEFAULT_SKILL_MANAGER_HOME = "/Users/runner/.skill-manager"
+WORKSPACE = "${{ github.workspace }}"
 DEFAULT_TRIGGER_PATHS = [
     "test_graph/**",
     "src/**",
@@ -137,6 +146,7 @@ def main() -> int:
     skill_manager_home = _skill_manager_home(
         args.skill_manager_home,
         args.symlink_mode,
+        repo_root,
         test_graph_root,
     )
 
@@ -211,7 +221,12 @@ def _job_id(name: str) -> str:
     return ident or "test-graph"
 
 
-def _skill_manager_home(override: str | None, mode: str, test_graph_root: Path) -> str:
+def _skill_manager_home(
+    override: str | None,
+    mode: str,
+    repo_root: Path,
+    test_graph_root: Path,
+) -> str:
     if override:
         home = Path(override).expanduser()
         if not home.is_absolute():
@@ -229,7 +244,18 @@ def _skill_manager_home(override: str | None, mode: str, test_graph_root: Path) 
             "<home>/skills/test-graph/project_sdk_sources/.\n"
             "  Pass --skill-manager-home explicitly, or use --symlink-mode repair."
         )
+
+    # A home inside the checkout is the shape scaffold.py emits, and it is
+    # the only one that survives a clone: baking this machine's absolute
+    # path into the workflow would reintroduce, in YAML, exactly the
+    # non-portability the relative symlinks removed.
+    if _is_within(inferred, repo_root):
+        return "/".join([WORKSPACE, *inferred.relative_to(repo_root).parts])
     return inferred.as_posix()
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
 
 
 def _infer_skill_manager_home(test_graph_root: Path) -> Path | None:
@@ -421,7 +447,9 @@ def render_workflow(
         ]
     )
 
-    workflow.extend(_symlink_step(symlink_mode))
+    workflow.extend(
+        _symlink_step(symlink_mode, workspace_home=skill_manager_home.startswith(WORKSPACE))
+    )
     workflow.extend(_discover_step(graphs))
     workflow.extend(_run_step(graphs))
     workflow.extend(
@@ -439,16 +467,57 @@ def render_workflow(
     return "\n".join(workflow)
 
 
-def _symlink_step(mode: str) -> list[str]:
+def _symlink_step(mode: str, *, workspace_home: bool) -> list[str]:
     if mode == "preserve":
-        return [
+        # Compare resolved directories, not the raw readlink string: the
+        # committed links are relative (scaffold.py keeps them that way so
+        # a clone is portable), so a string compare against an absolute
+        # $TEST_GRAPH_SKILL_HOME path can only ever fail.
+        lines = [
             "      - name: Validate scaffold symlinks resolve to skill-manager install",
             "        run: |",
-            "          test \"$(readlink \"$TEST_GRAPH_ROOT/sdk\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/sdk\"",
-            "          test \"$(readlink \"$TEST_GRAPH_ROOT/build-logic\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/build-logic\"",
-            "          test \"$(readlink \"$TEST_GRAPH_ROOT/standard-nodes\")\" = \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/standard-nodes\"",
-            "",
+            "          check() {",
+            "            name=\"$1\"",
+            "            link=\"$TEST_GRAPH_ROOT/$name\"",
+            "            if [ ! -L \"$link\" ]; then",
+            "              echo \"::error::$link is not a symlink\"",
+            "              exit 1",
+            "            fi",
         ]
+        if workspace_home:
+            # The regression guard for the absolute-symlink defect: an
+            # absolute target committed by an older scaffolder resolves on
+            # exactly one machine, and no environment override can redirect
+            # a path already frozen into a Git blob. Fail the PR that
+            # reintroduces it.
+            lines.extend(
+                [
+                    "            case \"$(readlink \"$link\")\" in",
+                    "              /*)",
+                    "                echo \"::error::$link is an absolute symlink"
+                    " ($(readlink \"$link\")); re-scaffold so it stays relative to the checkout\"",
+                    "                exit 1",
+                    "                ;;",
+                    "            esac",
+                ]
+            )
+        lines.extend(
+            [
+                "            actual=\"$(cd -P \"$link\" 2>/dev/null && pwd)\"",
+                "            expected=\"$(cd -P \"$TEST_GRAPH_SKILL_HOME/project_sdk_sources/$name\""
+                " && pwd)\"",
+                "            if [ \"$actual\" != \"$expected\" ]; then",
+                "              echo \"::error::$link resolves to '$actual', expected '$expected'\"",
+                "              exit 1",
+                "            fi",
+                "          }",
+                "          check sdk",
+                "          check build-logic",
+                "          check standard-nodes",
+                "",
+            ]
+        )
+        return lines
     return [
         "      - name: Point scaffold symlinks at installed skill",
         "        run: |",

@@ -48,9 +48,10 @@ test_graph/build-logic
 test_graph/standard-nodes
 ```
 
-Those links point into the installed test-graph skill, not into the consuming
-project. A GitHub checkout only contains the symlink records. The runner must
-install the test-graph skill before Gradle can load the SDK and build logic.
+Those links point into a copy of the skill's `project_sdk_sources/`, normally
+the one in the project's own `.skill-manager` home, which is gitignored. A
+GitHub checkout only contains the symlink records. The runner must install the
+test-graph skill before Gradle can load the SDK and build logic.
 
 The generated workflow does this in order:
 
@@ -90,16 +91,25 @@ skill-manager home and you want the workflow to create that same location:
 <skill>/scripts/github-action.py --symlink-mode preserve
 ```
 
-In preserve mode the script infers `SKILL_MANAGER_HOME` from a symlink target
-like:
+In preserve mode the script infers `SKILL_MANAGER_HOME` by resolving a scaffold
+symlink and taking the prefix above
+`skills/test-graph/project_sdk_sources/<name>`. For a scaffold made by
+`scaffold.py` that home sits inside the checkout, so the workflow emits it as
+`${{ github.workspace }}/.skill-manager` and installs the skill there. The
+committed relative links then resolve on the runner for the same reason they
+resolve on a developer's machine, with nothing rewritten.
 
-```text
-/Users/hayde/.skill-manager/skills/test-graph/project_sdk_sources/sdk
-```
+The workflow then validates that shape:
 
-and the workflow validates that the checked-in symlinks resolve to the
-installed skill. Pass `--skill-manager-home <absolute-path>` if inference is
-not possible.
+- each entry is still a symlink;
+- its target is relative, not absolute - an absolute target is a committed path
+  that resolves on exactly one machine, so this step fails the PR that
+  reintroduces one (only asserted when the home is inside the workspace);
+- it resolves to `$TEST_GRAPH_SKILL_HOME/project_sdk_sources/<name>`.
+
+A home inferred outside the workspace (an older scaffold with absolute links)
+is emitted as an absolute path, and the relative-target assertion is skipped.
+Pass `--skill-manager-home <absolute-path>` if inference is not possible.
 
 ## Private Installs
 
