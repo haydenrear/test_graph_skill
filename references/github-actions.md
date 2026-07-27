@@ -2,8 +2,9 @@
 
 Use `scripts/github-action.py` from an existing scaffolded project to add a
 GitHub Actions workflow that installs the test-graph skill with
-skill-manager, resolves the scaffold symlinks, discovers the graph, runs it,
-and uploads `test_graph/build/validation-reports/` as an artifact.
+skill-manager, prepares managed bindings (or repairs legacy symlinks),
+discovers the graph, runs it, and uploads
+`test_graph/build/validation-reports/` as an artifact.
 
 For the normal local workflow, start with [`workflows.md`](workflows.md).
 
@@ -40,7 +41,8 @@ directories in addition to `test_graph/**`.
 
 ## Why the Workflow Installs the Skill
 
-`scripts/scaffold.py` creates these scaffold entries as symlinks:
+New `scripts/scaffold.py` projects commit `provider-bindings.json` and generate
+these ignored runtime links:
 
 ```text
 test_graph/sdk
@@ -48,10 +50,10 @@ test_graph/build-logic
 test_graph/standard-nodes
 ```
 
-Those links point into a copy of the skill's `project_sdk_sources/`, normally
-the one in the project's own `.skill-manager` home, which is gitignored. A
-GitHub checkout only contains the symlink records. The runner must install the
-test-graph skill before Gradle can load the SDK and build logic.
+The GitHub checkout contains the portable manifest, not machine-specific
+symlink records. The runner installs the provider and `prepare-bindings.py`
+materializes the links before Gradle loads the SDK and build logic. Legacy
+committed links still use the repair path described below.
 
 The generated workflow does this in order:
 
@@ -59,7 +61,7 @@ The generated workflow does this in order:
 2. Prepare `SKILL_MANAGER_HOME`.
 3. Install `skill-manager`, JBang, and Python with Homebrew.
 4. Install the test-graph skill with `skill-manager install`.
-5. Resolve `test_graph/sdk`, `test_graph/build-logic`, and
+5. Prepare `test_graph/sdk`, `test_graph/build-logic`, and
    `test_graph/standard-nodes`.
 6. Run `discover.py` and `run.py`.
 7. Upload `test_graph/build/validation-reports/`.
@@ -72,8 +74,10 @@ Default mode is `repair`:
 <skill>/scripts/github-action.py --symlink-mode repair
 ```
 
-The workflow installs the skill at `/Users/runner/.skill-manager`, then
-rewrites the checkout symlinks in the Actions workspace to point at:
+For a managed project, the workflow runs `prepare-bindings.py`; unavailable
+workspace candidates fall back to the installed skill at
+`/Users/runner/.skill-manager`. For a legacy project, it rewrites checkout
+symlinks in the Actions workspace to point at:
 
 ```text
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/sdk
@@ -81,10 +85,10 @@ $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/build-logic
 $SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources/standard-nodes
 ```
 
-This is the most portable mode because it does not require the committed
-symlink targets to match the runner's filesystem.
+This is the portable mode because it does not require committed symlink targets
+to match the runner's filesystem.
 
-Use `preserve` when the checked-in symlinks already point under a fixed
+Use `preserve` only for a legacy project whose checked-in symlinks point under a fixed
 skill-manager home and you want the workflow to create that same location:
 
 ```bash
@@ -93,23 +97,25 @@ skill-manager home and you want the workflow to create that same location:
 
 In preserve mode the script infers `SKILL_MANAGER_HOME` by resolving a scaffold
 symlink and taking the prefix above
-`skills/test-graph/project_sdk_sources/<name>`. For a scaffold made by
-`scaffold.py` that home sits inside the checkout, so the workflow emits it as
-`${{ github.workspace }}/.skill-manager` and installs the skill there. The
-committed relative links then resolve on the runner for the same reason they
-resolve on a developer's machine, with nothing rewritten.
+`skills/test-graph/project_sdk_sources/<name>`. When that home turns out to be
+inside the checkout - the per-checkout `<repo>/.skill-manager` layout - the
+workflow emits it as `${{ github.workspace }}/.skill-manager` and installs the
+skill there, rather than baking the generating machine's absolute path into
+committed YAML that no runner can reproduce.
 
-The workflow then validates that shape:
+The workflow then validates the shape by resolved directory, not by `readlink`
+string:
 
 - each entry is still a symlink;
-- its target is relative, not absolute - an absolute target is a committed path
-  that resolves on exactly one machine, so this step fails the PR that
-  reintroduces one (only asserted when the home is inside the workspace);
-- it resolves to `$TEST_GRAPH_SKILL_HOME/project_sdk_sources/<name>`.
+- it resolves to `$TEST_GRAPH_SKILL_HOME/project_sdk_sources/<name>`;
+- when the home is inside the workspace, its target is relative, not absolute -
+  an absolute target there names one machine's checkout path, so the step fails
+  and points at `migrate-bindings.py`.
 
-A home inferred outside the workspace (an older scaffold with absolute links)
-is emitted as an absolute path, and the relative-target assertion is skipped.
-Pass `--skill-manager-home <absolute-path>` if inference is not possible.
+A home inferred outside the workspace is emitted as an absolute path and the
+relative-target assertion is skipped. Managed `provider-bindings.json` projects
+reject preserve mode; use repair. Pass `--skill-manager-home <absolute-path>`
+if legacy inference is not possible.
 
 ## Private Installs
 

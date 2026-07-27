@@ -511,43 +511,49 @@ Concrete examples are in:
 - `templates/uv-node.py.template`
 - `project_sdk_sources/build.gradle.kts`
 
-## Symlinked Shared Infrastructure
+## Managed Shared Infrastructure
 
-`scaffold.py` creates these as symlinks by default. The targets are always
-**relative** and always land inside the consuming tree - normally the project's
-own `.skill-manager` home:
+New scaffolds commit `test_graph/provider-bindings.json` and ignore these
+generated runtime links:
 
 ```text
-<repo>/test_graph/sdk            -> ../.skill-manager/skills/test-graph/project_sdk_sources/sdk
-<repo>/test_graph/build-logic    -> ../.skill-manager/skills/test-graph/project_sdk_sources/build-logic
-<repo>/test_graph/standard-nodes -> ../.skill-manager/skills/test-graph/project_sdk_sources/standard-nodes
+<repo>/test_graph/sdk
+<repo>/test_graph/build-logic
+<repo>/test_graph/standard-nodes
 ```
 
-The `../` count is computed, not templated. A consumer can sit any distance
-below the home that owns it - `meta-orchestrator/constituents/stream-lite` is
-two integration levels down and gets `../../../.skill-manager/...`.
+`discover.py` and `run.py` materialize the links before Gradle starts. A
+`workspace-relative` provider candidate is tried first when present, followed
+by the skill checkout running the wrapper. Workspace links are relative;
+installed-skill links are absolute runtime details. The manifest and provider
+content are durable. Literal symlink text is not.
 
-These links get committed, which is why they are never absolute. An absolute
-target baked in at scaffold time points at whatever `SKILL_MANAGER_HOME` named
-on the machine that ran the scaffolder; everywhere else - CI, every other
-developer - it dangles, and no environment override (`SKILL_MANAGER_HOME`,
-`-Duser.home`) can redirect a path already frozen into a Git blob.
+Legacy committed symlinks remain supported and are never rewritten
+automatically. The next `discover.py` or `run.py` invocation prints a migration
+notice on stderr. Migrate explicitly from the consuming repository with:
 
-Resolution order:
+```bash
+<skill>/scripts/migrate-bindings.py
+```
 
-1. A copy of `project_sdk_sources/` already inside `<repo>` (this skill's own
-   nested `test_graph/`, or a repo that vendors the skill checkout).
-2. The nearest `.skill-manager` home at or above `<repo>`.
-3. Neither: `scaffold.py` **refuses**. Create the project home first, or pass
-   `--copy-sdk`. It will not fall back to an absolute link.
+For an integration repository whose Test Graph provider is a sibling, add the
+portable first choice relative to `<consumer>/test_graph/`:
 
-Do not edit those paths from inside a consumer scaffold. Real SDK, plugin, or
-standard-node changes belong in `project_sdk_sources/sdk/`,
-`project_sdk_sources/build-logic/`, and
-`project_sdk_sources/standard-nodes/` in this repo, and reach the consumer
-through `skill-manager sync` into its home.
+```bash
+<skill>/scripts/migrate-bindings.py --workspace-provider ../../test_graph
+```
 
-Use `scaffold.py --copy-sdk` only when symlinks are not viable. That creates a
+Migration refuses real copied directories, adds the manifest and ignore rules,
+and stages removal of only the three generated links from Git's index. Review
+and commit those changes. `prepare-bindings.py` is the explicit idempotent
+materialization command; normal wrapper use does not require calling it.
+
+Do not edit generated binding paths from inside a consumer scaffold. Real SDK,
+plugin, or standard-node changes belong in `project_sdk_sources/sdk/`,
+`project_sdk_sources/build-logic/`, and `project_sdk_sources/standard-nodes/`
+in the provider repository.
+
+Use `scaffold.py --copy-sdk` only when managed symlinks are not viable. That creates a
 snapshot copy, so future upstream changes require re-scaffolding or manual sync.
 
 ## GitHub Actions

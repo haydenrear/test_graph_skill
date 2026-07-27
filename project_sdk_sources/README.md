@@ -81,8 +81,10 @@ From your repo root, scaffold a CI workflow with the upstream skill:
 <skill>/scripts/github-action.py
 ```
 
-The workflow installs the test-graph skill on the runner so the `sdk/`,
-`build-logic/`, and `standard-nodes/` symlinks resolve before Gradle runs.
+The workflow installs the test-graph skill on the runner and materializes the
+managed `sdk/`, `build-logic/`, and `standard-nodes/` runtime links before
+Gradle runs. The committed `provider-bindings.json`, not literal symlink text,
+is the portable source record.
 
 ## Importing your project's code
 

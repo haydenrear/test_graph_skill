@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Scaffold a GitHub Actions workflow for a test_graph project.
 
-The normal test_graph scaffold keeps ``test_graph/sdk``,
-``test_graph/build-logic``, and ``test_graph/standard-nodes`` as symlinks into
-the installed test-graph skill. A GitHub runner only works if those symlinks
-point at a real skill-manager install, so this script writes a workflow that
-installs the skill with skill-manager before running graph discovery and
-execution.
+Managed test_graph scaffolds commit ``provider-bindings.json`` and generate
+``test_graph/sdk``, ``test_graph/build-logic``, and
+``test_graph/standard-nodes`` at runtime. Legacy scaffolds keep committed
+symlinks. This script writes a workflow that supports both layouts after it
+installs the skill with skill-manager.
 
 Usage:
     github-action.py [repo-root]
@@ -19,13 +18,18 @@ when the checked-in symlink target already points under a fixed
 ``$SKILL_MANAGER_HOME/skills/test-graph/project_sdk_sources`` path and
 you want the runner to create that same home.
 
-``scaffold.py`` emits **relative** links into the project's own
-``.skill-manager`` home, so in preserve mode the inferred home usually sits
-inside the checkout. That home is emitted as ``${{ github.workspace }}/...``
-and the runner installs the skill into it, which is the point: the committed
-links then resolve on the runner for the same reason they resolve on a
-developer's machine, with nothing rewritten. Preserve mode validates that
-shape - link is relative, and resolves to the installed skill.
+Preserve mode is legacy-only, and legacy scaffolds vary: some point at a
+home outside the checkout, some at one inside it (the per-checkout
+``<repo>/.skill-manager`` layout). An inferred home *inside* the checkout is
+emitted as ``${{ github.workspace }}/...`` rather than as this machine's
+absolute path, which would only resolve on the machine that generated the
+workflow. Preserve mode validates the resulting shape by resolved directory,
+not by ``readlink`` string, and - when the home is in the workspace - rejects
+an absolute committed target.
+
+None of this is needed for a managed project: it commits
+``provider-bindings.json`` instead of links, so it uses ``repair`` mode and
+``prepare-bindings.py``. ``migrate-bindings.py`` moves a legacy project there.
 """
 from __future__ import annotations
 
@@ -236,6 +240,12 @@ def _skill_manager_home(
     if mode == "repair":
         return DEFAULT_SKILL_MANAGER_HOME
 
+    if (test_graph_root / "provider-bindings.json").is_file():
+        sys.exit(
+            "error: --symlink-mode preserve is only for legacy committed symlinks; "
+            "managed provider-bindings.json projects use --symlink-mode repair"
+        )
+
     inferred = _infer_skill_manager_home(test_graph_root)
     if inferred is None:
         sys.exit(
@@ -245,10 +255,12 @@ def _skill_manager_home(
             "  Pass --skill-manager-home explicitly, or use --symlink-mode repair."
         )
 
-    # A home inside the checkout is the shape scaffold.py emits, and it is
-    # the only one that survives a clone: baking this machine's absolute
-    # path into the workflow would reintroduce, in YAML, exactly the
-    # non-portability the relative symlinks removed.
+    # A legacy home inside the checkout is the per-checkout
+    # `<repo>/.skill-manager` layout. Emitting this machine's absolute path
+    # for it would put the same non-portability the managed bindings removed
+    # from the symlinks back into the workflow YAML, where nothing
+    # regenerates it: the workflow is committed, and a runner's workspace is
+    # never `/Users/<someone>/...`.
     if _is_within(inferred, repo_root):
         return "/".join([WORKSPACE, *inferred.relative_to(repo_root).parts])
     return inferred.as_posix()
@@ -469,10 +481,12 @@ def render_workflow(
 
 def _symlink_step(mode: str, *, workspace_home: bool) -> list[str]:
     if mode == "preserve":
-        # Compare resolved directories, not the raw readlink string: the
-        # committed links are relative (scaffold.py keeps them that way so
-        # a clone is portable), so a string compare against an absolute
-        # $TEST_GRAPH_SKILL_HOME path can only ever fail.
+        # Compare resolved directories, not the raw readlink string. A
+        # string compare only holds for a legacy link whose literal text
+        # equals the runner's $TEST_GRAPH_SKILL_HOME path; it fails for a
+        # relative link, for a link through a symlinked home (/var vs
+        # /private/var on macOS), and it passes for a link whose text
+        # matches but whose target does not exist.
         lines = [
             "      - name: Validate scaffold symlinks resolve to skill-manager install",
             "        run: |",
@@ -485,17 +499,18 @@ def _symlink_step(mode: str, *, workspace_home: bool) -> list[str]:
             "            fi",
         ]
         if workspace_home:
-            # The regression guard for the absolute-symlink defect: an
-            # absolute target committed by an older scaffolder resolves on
-            # exactly one machine, and no environment override can redirect
-            # a path already frozen into a Git blob. Fail the PR that
-            # reintroduces it.
+            # Only reachable when the home is inside the checkout. An
+            # absolute committed target then names *this* checkout's path,
+            # so it resolves on exactly one machine and no environment
+            # override can redirect a path already frozen into a Git blob.
+            # Fail the PR rather than let Gradle silently load nothing.
             lines.extend(
                 [
                     "            case \"$(readlink \"$link\")\" in",
                     "              /*)",
                     "                echo \"::error::$link is an absolute symlink"
-                    " ($(readlink \"$link\")); re-scaffold so it stays relative to the checkout\"",
+                    " ($(readlink \"$link\")); run migrate-bindings.py to replace the"
+                    " committed links with provider-bindings.json\"",
                     "                exit 1",
                     "                ;;",
                     "            esac",
@@ -519,8 +534,13 @@ def _symlink_step(mode: str, *, workspace_home: bool) -> list[str]:
         )
         return lines
     return [
-        "      - name: Point scaffold symlinks at installed skill",
+        "      - name: Prepare Test Graph provider bindings",
         "        run: |",
+        "          if [ -f \"$TEST_GRAPH_ROOT/provider-bindings.json\" ]; then",
+        "            \"$TEST_GRAPH_SKILL_HOME/scripts/prepare-bindings.py\" --test-graph-root \"$TEST_GRAPH_ROOT\"",
+        "            exit 0",
+        "          fi",
+        "          # Legacy compatibility; migrate-bindings.py removes the need for this branch.",
         "          relink() {",
         "            name=\"$1\"",
         "            link=\"$TEST_GRAPH_ROOT/$name\"",
