@@ -37,6 +37,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"}
@@ -350,20 +351,90 @@ def remove_provider_binding_ignores(test_graph_root: Path) -> None:
     ignore_path.write_text((before.rstrip() + after).rstrip() + "\n", encoding="utf-8")
 
 
-def load_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
-    manifest = provider_bindings_manifest(test_graph_root)
-    if not manifest.exists():
+@dataclass(frozen=True)
+class ManagedBindingState:
+    """Byte-exact prior state of every path a managed-binding write touches.
+
+    ``links`` maps each binding name to its symlink target, or ``None`` when
+    nothing was there. ``manifest`` and ``gitignore`` hold file bytes, or
+    ``None`` when the file did not exist as a plain file.
+    """
+
+    links: dict[str, str | None]
+    manifest: bytes | None
+    gitignore: bytes | None
+
+
+def capture_managed_bindings(test_graph_root: Path) -> ManagedBindingState:
+    """Snapshot the managed-binding paths so a failed apply can be undone.
+
+    Taken before the first write of the
+    ``write_provider_bindings_manifest`` /
+    ``ensure_provider_binding_ignores`` / ``prepare_provider_bindings``
+    sequence; see :func:`rollback_managed_bindings`.
+    """
+
+    links: dict[str, str | None] = {}
+    for name in sorted(PROVIDER_BINDINGS):
+        path = test_graph_root / name
+        links[name] = os.readlink(path) if path.is_symlink() else None
+    return ManagedBindingState(
+        links=links,
+        manifest=_plain_file_bytes(provider_bindings_manifest(test_graph_root)),
+        gitignore=_plain_file_bytes(test_graph_root / ".gitignore"),
+    )
+
+
+def rollback_managed_bindings(
+    test_graph_root: Path,
+    state: ManagedBindingState,
+) -> None:
+    """Restore a captured state, undoing a partially applied managed binding.
+
+    The one rollback idiom for the apply sequence: scaffold's fallback to
+    copies and migrate's failure path both use it, so there is a single
+    definition of what "undo the managed binding" means.
+    """
+
+    for name, target in state.links.items():
+        path = test_graph_root / name
+        if path.is_symlink():
+            if target is not None and os.readlink(path) == target:
+                continue
+            path.unlink()
+        elif path.exists():
+            # A real directory was never ours to create, so it is not ours
+            # to remove either; prepare_provider_bindings refuses them too.
+            continue
+        if target is not None:
+            os.symlink(target, path, target_is_directory=True)
+    _restore_plain_file(provider_bindings_manifest(test_graph_root), state.manifest)
+    _restore_plain_file(test_graph_root / ".gitignore", state.gitignore)
+
+
+def _plain_file_bytes(path: Path) -> bytes | None:
+    if path.is_symlink() or not path.is_file():
         return None
-    if manifest.is_symlink() or not manifest.is_file():
-        raise ProviderBindingError(f"provider binding manifest must be a file: {manifest}")
-    if manifest.stat().st_size > 64 * 1024:
-        raise ProviderBindingError(f"provider binding manifest is too large: {manifest}")
-    try:
-        document = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ProviderBindingError(
-            f"cannot read provider binding manifest {manifest}: {error}"
-        ) from error
+    return path.read_bytes()
+
+
+def _restore_plain_file(path: Path, content: bytes | None) -> None:
+    if content is None:
+        path.unlink(missing_ok=True)
+        return
+    if _plain_file_bytes(path) == content:
+        return
+    path.unlink(missing_ok=True)
+    path.write_bytes(content)
+
+
+def validate_provider_bindings_document(document: object) -> dict[str, object]:
+    """Enforce the strict manifest schema on an in-memory document.
+
+    Split out of :func:`load_provider_bindings` so a document can be
+    checked before it is written to disk, not only after.
+    """
+
     if not isinstance(document, dict):
         raise ProviderBindingError("provider binding manifest must be a JSON object")
     if set(document) != {"schema_version", "provider_candidates", "bindings"}:
@@ -393,16 +464,37 @@ def load_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
     return document
 
 
-def prepare_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
-    """Materialize a managed scaffold from the first complete provider."""
+def load_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
+    manifest = provider_bindings_manifest(test_graph_root)
+    if not manifest.exists():
+        return None
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ProviderBindingError(f"provider binding manifest must be a file: {manifest}")
+    if manifest.stat().st_size > 64 * 1024:
+        raise ProviderBindingError(f"provider binding manifest is too large: {manifest}")
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ProviderBindingError(
+            f"cannot read provider binding manifest {manifest}: {error}"
+        ) from error
+    return validate_provider_bindings_document(document)
+
+
+def select_provider_root(
+    test_graph_root: Path,
+    document: dict[str, object],
+) -> tuple[str, Path]:
+    """First candidate that carries every binding, without touching the project.
+
+    Read-only on purpose: callers that are about to write can resolve the
+    provider first and refuse before making any change.
+    """
 
     root = test_graph_root.resolve()
-    document = load_provider_bindings(root)
-    if document is None:
-        return None
-    selected_kind: str | None = None
-    selected_root: Path | None = None
-    for candidate in document["provider_candidates"]:
+    candidates = document["provider_candidates"]
+    assert isinstance(candidates, list)
+    for candidate in candidates:
         assert isinstance(candidate, dict)
         kind = str(candidate["kind"])
         if kind == "workspace-relative":
@@ -410,14 +502,21 @@ def prepare_provider_bindings(test_graph_root: Path) -> dict[str, object] | None
         else:
             provider_root = skill_root().resolve()
         if all((provider_root / relative).is_dir() for relative in PROVIDER_BINDINGS.values()):
-            selected_kind = kind
-            selected_root = provider_root
-            break
-    if selected_root is None or selected_kind is None:
-        raise ProviderBindingError(
-            f"no complete Test Graph provider is available for {root}; "
-            "install/update the test-graph skill or restore the workspace provider"
-        )
+            return kind, provider_root
+    raise ProviderBindingError(
+        f"no complete Test Graph provider is available for {root}; "
+        "install/update the test-graph skill or restore the workspace provider"
+    )
+
+
+def prepare_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
+    """Materialize a managed scaffold from the first complete provider."""
+
+    root = test_graph_root.resolve()
+    document = load_provider_bindings(root)
+    if document is None:
+        return None
+    selected_kind, selected_root = select_provider_root(root, document)
 
     real_paths = [
         root / name

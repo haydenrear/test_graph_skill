@@ -18,18 +18,22 @@ committed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import _common  # noqa: E402
+import scaffold  # noqa: E402
 
 
 LINK_NAMES = tuple(sorted(_common.PROVIDER_BINDINGS))
@@ -81,6 +85,47 @@ class CopySdkScaffoldTest(unittest.TestCase):
                 entry = root / name
                 self.assertTrue(entry.exists(), f"{name} missing")
                 self.assertFalse(entry.is_symlink(), f"{name} should be a copy")
+
+
+class ManagedBindingFallbackTest(unittest.TestCase):
+    """Scaffold's fallback shares one rollback with migrate-bindings.py.
+
+    Where symlinks are unavailable - Windows without developer mode is the
+    case this exists for - the managed attempt must leave nothing of itself
+    behind before the copies land, or the copied directories arrive under an
+    ignore block that hides them from the commit.
+    """
+
+    def test_symlink_failure_rolls_back_before_falling_back_to_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            stderr = io.StringIO()
+
+            with patch.object(
+                _common.os, "symlink", side_effect=OSError("symlinks unavailable")
+            ), patch.object(sys, "argv", ["scaffold.py", str(repo)]):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                    stderr
+                ):
+                    self.assertEqual(0, scaffold.main())
+
+            self.assertIn("falling back to copies", stderr.getvalue())
+            root = repo / "test_graph"
+            self.assertFalse(
+                (root / _common.PROVIDER_BINDINGS_MANIFEST).exists(),
+                "a manifest left by the failed attempt would point "
+                "prepare-bindings.py at the copies it must not touch",
+            )
+            for name in LINK_NAMES:
+                entry = root / name
+                self.assertTrue(entry.is_dir(), f"{name} missing")
+                self.assertFalse(entry.is_symlink(), f"{name} should be a copy")
+            self.assertEqual(
+                (_common.project_sdk_sources() / ".gitignore").read_bytes(),
+                (root / ".gitignore").read_bytes(),
+                "the ignore file must come back byte for byte, or the copied "
+                "SDK directories stay ignored and never get committed",
+            )
 
 
 class LegacyPreserveWorkflowTest(unittest.TestCase):

@@ -30,10 +30,11 @@ from pathlib import Path
 from _common import (
     PROVIDER_BINDINGS,
     ProviderBindingError,
+    capture_managed_bindings,
     ensure_provider_binding_ignores,
     prepare_provider_bindings,
     project_sdk_sources,
-    remove_provider_binding_ignores,
+    rollback_managed_bindings,
     write_provider_bindings_manifest,
 )
 
@@ -124,6 +125,7 @@ def main() -> int:
 
     managed_bindings = False
     if not args.copy_sdk:
+        before = capture_managed_bindings(target)
         try:
             write_provider_bindings_manifest(target)
             ensure_provider_binding_ignores(target)
@@ -135,12 +137,7 @@ def main() -> int:
                 f"(falling back to copies): {error}",
                 file=sys.stderr,
             )
-            for name in SYMLINK_TARGETS:
-                binding = target / name
-                if binding.is_symlink():
-                    binding.unlink()
-            (target / "provider-bindings.json").unlink(missing_ok=True)
-            remove_provider_binding_ignores(target)
+            rollback_managed_bindings(target, before)
             for name in SYMLINK_TARGETS:
                 shutil.copytree(src / name, target / name, ignore=_ignore)
 

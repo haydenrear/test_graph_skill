@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +36,73 @@ def _provider_root(parent: Path) -> Path:
     for relative in _common.PROVIDER_BINDINGS.values():
         (root / relative).mkdir(parents=True)
     return root
+
+
+def _load_migrate_module():
+    """Import migrate-bindings.py, whose hyphenated name blocks `import`."""
+    spec = importlib.util.spec_from_file_location(
+        "migrate_bindings", SCRIPTS_DIR / "migrate-bindings.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(repo: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+
+def _legacy_git_project(parent: Path) -> tuple[Path, Path, Path]:
+    """A committed pre-managed scaffold: tracked links, no manifest.
+
+    Returns ``(repo, test_graph_root, provider_root)``.
+    """
+    repo = parent / "repo"
+    root = _scaffold_root(repo)
+    (root / "build.gradle.kts").write_text("validationGraph { }\n", encoding="utf-8")
+    (root / ".gitignore").write_text(
+        "# project rules that predate managed bindings\n/docs\n/reports\n",
+        encoding="utf-8",
+    )
+    provider = _provider_root(repo)
+    for name, relative in _common.PROVIDER_BINDINGS.items():
+        os.symlink(provider / relative, root / name, target_is_directory=True)
+    (repo / "keep.txt").write_text("keep\n", encoding="utf-8")
+    for command in (
+        ["init", "-q"],
+        ["config", "user.name", "Test Graph"],
+        ["config", "user.email", "test-graph@example.invalid"],
+        ["add", "."],
+        ["commit", "-q", "-m", "legacy scaffold"],
+    ):
+        _git(repo, *command)
+    return repo, root, provider
+
+
+def _skill_install_without_provider(parent: Path) -> Path:
+    """A test-graph install whose project_sdk_sources/ is not there.
+
+    This is the shape that makes provider selection fail for real: the
+    scripts are present and runnable, so ``skill_root()`` resolves, but the
+    skill-root candidate carries none of the three bindings.
+    """
+    skill = parent / "skill-without-provider"
+    (skill / "scripts").mkdir(parents=True)
+    for script in SCRIPTS_DIR.glob("*.py"):
+        shutil.copy2(script, skill / "scripts" / script.name)
+    return skill
+
+
+def _fake_gradlew(root: Path, output: str) -> None:
+    gradlew = root / "gradlew"
+    gradlew.write_text(f"#!/bin/sh\necho '{output}'\n", encoding="utf-8")
+    gradlew.chmod(gradlew.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 class ProviderBindingsTest(unittest.TestCase):
@@ -219,6 +289,227 @@ class ProviderBindingsTest(unittest.TestCase):
             for name in _common.PROVIDER_BINDINGS:
                 self.assertTrue((root / name).is_symlink())
             run.assert_called_once()
+
+
+class MigrationAtomicityTest(unittest.TestCase):
+    """A migration that cannot finish must not start, and must leave no trace.
+
+    The failure being pinned: the manifest, the ignore block and the staged
+    link removals used to land before the provider was ever resolved. A
+    project left in that state is worse than an unmigrated one -
+    ``prepare_provider_bindings_or_warn`` sees a manifest, stops falling back
+    to the still-working legacy symlinks, and hard-exits every wrapper.
+    """
+
+    def _failing_migration(
+        self, root: Path, parent: Path
+    ) -> subprocess.CompletedProcess[str]:
+        skill = _skill_install_without_provider(parent)
+        return subprocess.run(
+            [
+                sys.executable,
+                str(skill / "scripts" / "migrate-bindings.py"),
+                "--test-graph-root",
+                str(root),
+                "--workspace-provider",
+                "../mistyped-provider",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_failed_migration_leaves_no_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, _provider = _legacy_git_project(parent)
+            # Unrelated staged work: a rollback must not reach past its own
+            # three paths (which `git reset` or `git checkout -- .` would).
+            (repo / "keep.txt").write_text("keep editing\n", encoding="utf-8")
+            _git(repo, "add", "keep.txt")
+
+            ignore_before = (root / ".gitignore").read_bytes()
+            status_before = _git(repo, "status", "--porcelain")
+            links_before = {
+                name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS
+            }
+
+            completed = self._failing_migration(root, parent)
+
+            self.assertNotEqual(0, completed.returncode, completed.stdout)
+            self.assertIn("no complete Test Graph provider", completed.stderr)
+            self.assertFalse(
+                _common.provider_bindings_manifest(root).exists(),
+                "a manifest from a failed migration takes the wrappers off the "
+                "legacy path with nothing to replace it",
+            )
+            self.assertEqual(
+                ignore_before,
+                (root / ".gitignore").read_bytes(),
+                "the managed-bindings ignore block outlived the failed migration",
+            )
+            self.assertEqual(
+                status_before,
+                _git(repo, "status", "--porcelain"),
+                "the failed migration left staged index changes behind",
+            )
+            self.assertEqual(
+                links_before,
+                {name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS},
+            )
+
+    def test_a_locked_index_rolls_the_migration_back(self) -> None:
+        """The failure that lands *after* the provider resolves.
+
+        Resolving up front cannot help here - a concurrent Git process takes
+        ``index.lock`` while the manifest and the ignore block are already
+        written - so only the rollback keeps the invariant.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(parent)
+            ignore_before = (root / ".gitignore").read_bytes()
+            status_before = _git(repo, "status", "--porcelain")
+            links_before = {
+                name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS
+            }
+            lock = repo / ".git" / "index.lock"
+            lock.write_text("", encoding="utf-8")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "migrate-bindings.py"),
+                    "--test-graph-root",
+                    str(root),
+                    "--workspace-provider",
+                    os.path.relpath(provider, root),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            lock.unlink()
+
+            self.assertNotEqual(0, completed.returncode, completed.stdout)
+            self.assertIn("cannot untrack generated provider links", completed.stderr)
+            self.assertFalse(_common.provider_bindings_manifest(root).exists())
+            self.assertEqual(ignore_before, (root / ".gitignore").read_bytes())
+            self.assertEqual(status_before, _git(repo, "status", "--porcelain"))
+            self.assertEqual(
+                links_before,
+                {name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS},
+            )
+
+    def test_discover_still_runs_on_the_legacy_path_after_a_failed_migration(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, _provider = _legacy_git_project(parent)
+            _fake_gradlew(root, "graphs: smoke")
+
+            self.assertNotEqual(0, self._failing_migration(root, parent).returncode)
+
+            discovered = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "discover.py"),
+                    "--test-graph-root",
+                    str(root),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(0, discovered.returncode, discovered.stderr)
+            self.assertIn("graphs: smoke", discovered.stdout)
+            self.assertIn(
+                "legacy Test Graph provider symlinks remain supported",
+                discovered.stderr,
+            )
+
+    def test_successful_migration_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(parent)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "migrate-bindings.py"),
+                    "--test-graph-root",
+                    str(root),
+                    "--workspace-provider",
+                    os.path.relpath(provider, root),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn("migrated Test Graph provider bindings", completed.stdout)
+            self.assertIn("staged generated-link removals", completed.stdout)
+            document = json.loads(
+                _common.provider_bindings_manifest(root).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                "workspace-relative",
+                document["provider_candidates"][0]["kind"],
+            )
+            ignored = (root / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn("# project rules that predate managed bindings", ignored)
+            self.assertIn(_common.PROVIDER_BINDING_IGNORE_BEGIN, ignored)
+            staged = _git(repo, "status", "--porcelain").splitlines()
+            for name in _common.PROVIDER_BINDINGS:
+                self.assertIn(f"D  consumer/test_graph/{name}", staged)
+                link = root / name
+                self.assertTrue(link.is_symlink())
+                self.assertFalse(Path(os.readlink(link)).is_absolute())
+
+    def test_rollback_restores_captured_bindings_byte_for_byte(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(parent)
+            before = _common.capture_managed_bindings(root)
+
+            _common.write_provider_bindings_manifest(
+                root, workspace_provider=os.path.relpath(provider, root)
+            )
+            _common.ensure_provider_binding_ignores(root)
+            _common.prepare_provider_bindings(root)
+            _common.rollback_managed_bindings(root, before)
+
+            self.assertFalse(_common.provider_bindings_manifest(root).exists())
+            self.assertEqual(before.gitignore, (root / ".gitignore").read_bytes())
+            self.assertEqual(
+                before.links,
+                {
+                    name: os.readlink(root / name)
+                    for name in sorted(_common.PROVIDER_BINDINGS)
+                },
+            )
+
+    def test_untracked_index_entries_are_restored_exactly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, _provider = _legacy_git_project(parent)
+            migrate = _load_migrate_module()
+            status_before = _git(repo, "status", "--porcelain")
+            listed_before = _git(repo, "ls-files", "-s")
+
+            git_root, tracked, entries = migrate._generated_link_index(root)
+            assert git_root is not None
+            self.assertEqual(len(_common.PROVIDER_BINDINGS), len(tracked))
+            migrate._untrack_generated_links(git_root, tracked)
+            self.assertNotEqual(status_before, _git(repo, "status", "--porcelain"))
+
+            migrate._restore_index(git_root, entries)
+
+            self.assertEqual(status_before, _git(repo, "status", "--porcelain"))
+            self.assertEqual(listed_before, _git(repo, "ls-files", "-s"))
 
 
 if __name__ == "__main__":
