@@ -8,6 +8,12 @@ undone as a group if any of them fails. A migration that does not finish
 leaves the project exactly as it was found, still on the legacy path, because
 a half-migrated project is worse than an unmigrated one: the wrappers see a
 manifest, stop falling back to the legacy symlinks, and hard-exit.
+
+For the same reason an explicitly passed ``--workspace-provider`` must resolve
+here and now. The manifest this writes is committed and read by every consumer
+of the repository, so a provider path that resolves nowhere has to be refused
+at authoring time even though falling back to the installed skill is the right
+behaviour at run time. See :func:`_require_workspace_provider`.
 """
 from __future__ import annotations
 
@@ -17,13 +23,17 @@ import sys
 from pathlib import Path
 
 from _common import (
+    PROVIDER_BINDING_IGNORE_BEGIN,
     PROVIDER_BINDINGS,
+    PROVIDER_BINDINGS_MANIFEST,
     ProviderBindingError,
     add_test_graph_root_arg,
     capture_managed_bindings,
     ensure_provider_binding_ignores,
+    missing_provider_bindings,
     prepare_provider_bindings,
     provider_bindings_document,
+    provider_root_is_complete,
     rollback_managed_bindings,
     select_provider_root,
     target_project_root,
@@ -74,6 +84,43 @@ def _generated_link_index(root: Path) -> tuple[Path | None, list[str], list[str]
     return git_root, tracked, listed.stdout.splitlines()
 
 
+def _require_workspace_provider(root: Path, workspace_provider: str) -> None:
+    """An explicitly passed --workspace-provider is an assertion, not a hint.
+
+    Authoring time and run time are deliberately asymmetric here, and the two
+    must not be "fixed" to match:
+
+    * At run time - prepare-bindings.py and the wrappers - falling through a
+      missing workspace provider to the installed skill is correct. The
+      manifest is already committed and shared; the workspace copy can be
+      legitimately absent on this machine or this CI runner, and the build
+      still has to run.
+    * At authoring time - here - the same fall-through is a silent defect. The
+      unresolvable path is written into the manifest as the *first* candidate
+      and committed, the command exits 0, and from then on every consumer of
+      that repository skips the dead candidate and materializes an absolute
+      skill-root link: precisely the absolute-path-in-the-tree failure managed
+      bindings exist to remove. One mistyped path in a fan-out loop reproduces
+      it across every repository at once, with a green exit each time.
+
+    So a provider the caller named explicitly must resolve now. Omitting the
+    flag is unchanged: the skill-root candidate stands alone and is legitimate.
+    """
+
+    resolved = (root / workspace_provider).resolve()
+    if provider_root_is_complete(resolved):
+        return
+    raise ProviderBindingError(
+        f"--workspace-provider {workspace_provider} does not carry a Test Graph "
+        f"provider (resolved to {resolved}; missing "
+        + ", ".join(missing_provider_bindings(resolved))
+        + "). Refusing to fall back to the installed skill: that would commit "
+        "this path as the manifest's first candidate and leave every consumer "
+        "materializing an absolute link. Fix the path, or omit "
+        "--workspace-provider to bind to the installed skill deliberately."
+    )
+
+
 def _untrack_generated_links(git_root: Path, tracked: list[str]) -> None:
     removed = _git_output(git_root, "rm", "--cached", "--quiet", "--", *tracked)
     if removed.returncode != 0:
@@ -110,8 +157,11 @@ def main() -> int:
     parser.add_argument(
         "--workspace-provider",
         help=(
-            "Optional provider root relative to test_graph/. It is tried before "
-            "the installed/running skill, which remains the fallback."
+            "Optional provider root relative to test_graph/, recorded as the "
+            "manifest's first candidate. If given it must resolve now: "
+            "migration refuses rather than quietly binding to the installed "
+            "skill instead. Omit it to bind to the installed skill on purpose. "
+            "At run time the installed skill remains the fallback."
         ),
     )
     args = parser.parse_args()
@@ -136,6 +186,8 @@ def main() -> int:
             workspace_provider=args.workspace_provider,
         )
         validate_provider_bindings_document(document)
+        if args.workspace_provider is not None:
+            _require_workspace_provider(root, args.workspace_provider)
         select_provider_root(root, document)
         git_root, tracked, index_entries = _generated_link_index(root)
     except (OSError, ValueError, ProviderBindingError) as error:
@@ -157,12 +209,25 @@ def main() -> int:
             untracked = True
         result = prepare_provider_bindings(root)
     except (OSError, ValueError, ProviderBindingError) as error:
-        rollback_managed_bindings(root, before)
-        # Only when the index really changed: `git rm --cached` writes the
-        # index once, under lock, so a failed one left nothing to put back.
-        if untracked:
-            assert git_root is not None
-            _restore_index(git_root, index_entries)
+        # The original error explains why the migration failed and is the more
+        # useful of the two, so a rollback that fails is reported alongside it,
+        # never instead of it.
+        try:
+            rollback_managed_bindings(root, before)
+            # Only when the index really changed: `git rm --cached` writes the
+            # index once, under lock, so a failed one left nothing to put back.
+            if untracked:
+                assert git_root is not None
+                _restore_index(git_root, index_entries)
+        except OSError as rollback_error:
+            parser.error(
+                f"{error}\n"
+                f"  the rollback then failed too: {rollback_error}\n"
+                f"  {root} is partially migrated: delete "
+                f"{PROVIDER_BINDINGS_MANIFEST}, drop the "
+                f"{PROVIDER_BINDING_IGNORE_BEGIN} block from .gitignore, and "
+                "restore the generated links with `git checkout HEAD --`"
+            )
         parser.error(f"{error}\n  migration rolled back; the project is unchanged")
     assert result is not None
     print(f"migrated Test Graph provider bindings at {root}")

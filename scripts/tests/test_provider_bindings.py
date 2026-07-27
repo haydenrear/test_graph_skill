@@ -304,6 +304,14 @@ class MigrationAtomicityTest(unittest.TestCase):
     def _failing_migration(
         self, root: Path, parent: Path
     ) -> subprocess.CompletedProcess[str]:
+        """Migrate from an install whose provider has not landed yet.
+
+        No ``--workspace-provider``: the failure under test is the skill-root
+        candidate being incomplete, which is what
+        :func:`_common.select_provider_root` decides. An explicitly named
+        provider is refused earlier and separately - see
+        ``test_an_unresolvable_workspace_provider_is_refused``.
+        """
         skill = _skill_install_without_provider(parent)
         return subprocess.run(
             [
@@ -311,8 +319,6 @@ class MigrationAtomicityTest(unittest.TestCase):
                 str(skill / "scripts" / "migrate-bindings.py"),
                 "--test-graph-root",
                 str(root),
-                "--workspace-provider",
-                "../mistyped-provider",
             ],
             text=True,
             capture_output=True,
@@ -357,6 +363,127 @@ class MigrationAtomicityTest(unittest.TestCase):
                 links_before,
                 {name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS},
             )
+
+    def test_an_unresolvable_workspace_provider_is_refused(self) -> None:
+        """The install is COMPLETE here, so the skill-root fallback would work.
+
+        That is the whole defect: falling back would exit 0 and commit a first
+        candidate that resolves on no machine, handing every consumer of the
+        repository an absolute skill-root link.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, _provider = _legacy_git_project(parent)
+            ignore_before = (root / ".gitignore").read_bytes()
+            status_before = _git(repo, "status", "--porcelain")
+            links_before = {
+                name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS
+            }
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "migrate-bindings.py"),
+                    "--test-graph-root",
+                    str(root),
+                    # The fan-out typo: .skill-manger, not .skill-manager.
+                    "--workspace-provider",
+                    "../.skill-manger/skills/test-graph",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            # State first, deliberately: the failure this pins down exits 0,
+            # so an exit-code assertion would be the thing that catches it and
+            # the report would say "0 == 0" instead of naming the manifest
+            # that should not exist.
+            self.assertFalse(
+                _common.provider_bindings_manifest(root).exists(),
+                "a manifest naming an unresolvable first candidate is the "
+                "defect itself, committed",
+            )
+            self.assertEqual(ignore_before, (root / ".gitignore").read_bytes())
+            self.assertEqual(status_before, _git(repo, "status", "--porcelain"))
+            self.assertEqual(
+                links_before,
+                {name: os.readlink(root / name) for name in _common.PROVIDER_BINDINGS},
+            )
+            self.assertNotEqual(0, completed.returncode, completed.stdout)
+            self.assertIn("--workspace-provider", completed.stderr)
+            self.assertIn(
+                "Refusing to fall back to the installed skill", completed.stderr
+            )
+
+    def test_an_omitted_workspace_provider_still_binds_to_the_installed_skill(
+        self,
+    ) -> None:
+        """Omitting the flag is a deliberate skill-root binding, not a typo."""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, _provider = _legacy_git_project(parent)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "migrate-bindings.py"),
+                    "--test-graph-root",
+                    str(root),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            document = json.loads(
+                _common.provider_bindings_manifest(root).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                [{"kind": "skill-root"}], document["provider_candidates"]
+            )
+            for name in _common.PROVIDER_BINDINGS:
+                self.assertTrue(Path(os.readlink(root / name)).is_absolute())
+
+    def test_a_failing_rollback_reports_the_original_error_too(self) -> None:
+        """The rollback's own failure must not eat the reason for the failure."""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(parent)
+            lock = repo / ".git" / "index.lock"
+            lock.write_text("", encoding="utf-8")
+            migrate = _load_migrate_module()
+            stderr = io.StringIO()
+
+            with patch.object(
+                migrate,
+                "rollback_managed_bindings",
+                side_effect=OSError("read-only file system"),
+            ), patch.object(
+                sys,
+                "argv",
+                [
+                    "migrate-bindings.py",
+                    "--test-graph-root",
+                    str(root),
+                    "--workspace-provider",
+                    os.path.relpath(provider, root),
+                ],
+            ):
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    migrate.main()
+            lock.unlink()
+
+            reported = stderr.getvalue()
+            self.assertIn(
+                "cannot untrack generated provider links",
+                reported,
+                "the original error is the one that explains the failure",
+            )
+            self.assertIn("the rollback then failed too", reported)
+            self.assertIn("read-only file system", reported)
+            self.assertIn("partially migrated", reported)
 
     def test_a_locked_index_rolls_the_migration_back(self) -> None:
         """The failure that lands *after* the provider resolves.

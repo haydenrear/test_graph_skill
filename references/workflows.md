@@ -543,6 +543,20 @@ portable first choice relative to `<consumer>/test_graph/`:
 <skill>/scripts/migrate-bindings.py --workspace-provider ../../test_graph
 ```
 
+A `--workspace-provider` that is passed must resolve to a complete provider at
+migration time; migration refuses instead of binding to the installed skill in
+its place. The manifest is committed and read by every consumer of the
+repository, so a path that resolves nowhere would leave all of them
+materializing an absolute installed-skill link. Omit the flag to bind to the
+installed skill deliberately. At run time the fallback still applies:
+`prepare-bindings.py` and the wrappers move on to the next candidate when a
+workspace provider is absent on that machine.
+
+Migration is all or nothing. Whatever it cannot complete it does not begin, and
+a failure after writing has started is rolled back - manifest, ignore block,
+generated links and the staged index entries - so the project stays on the
+working legacy path.
+
 Migration refuses real copied directories, adds the manifest and ignore rules,
 and stages removal of only the three generated links from Git's index. Review
 and commit those changes. `prepare-bindings.py` is the explicit idempotent

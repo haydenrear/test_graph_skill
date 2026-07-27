@@ -481,6 +481,24 @@ def load_provider_bindings(test_graph_root: Path) -> dict[str, object] | None:
     return validate_provider_bindings_document(document)
 
 
+def provider_root_is_complete(provider_root: Path) -> bool:
+    """True when a provider root carries every managed binding."""
+
+    return all(
+        (provider_root / relative).is_dir() for relative in PROVIDER_BINDINGS.values()
+    )
+
+
+def missing_provider_bindings(provider_root: Path) -> list[str]:
+    """The binding sources a provider root does not carry, for error text."""
+
+    return sorted(
+        relative
+        for relative in PROVIDER_BINDINGS.values()
+        if not (provider_root / relative).is_dir()
+    )
+
+
 def select_provider_root(
     test_graph_root: Path,
     document: dict[str, object],
@@ -501,7 +519,7 @@ def select_provider_root(
             provider_root = (root / str(candidate["path"])).resolve()
         else:
             provider_root = skill_root().resolve()
-        if all((provider_root / relative).is_dir() for relative in PROVIDER_BINDINGS.values()):
+        if provider_root_is_complete(provider_root):
             return kind, provider_root
     raise ProviderBindingError(
         f"no complete Test Graph provider is available for {root}; "
