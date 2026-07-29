@@ -562,6 +562,28 @@ and stages removal of only the three generated links from Git's index. Review
 and commit those changes. `prepare-bindings.py` is the explicit idempotent
 materialization command; normal wrapper use does not require calling it.
 
+Migration writes the **canonical three-binding set** even when the legacy
+project tracked only two links, and prints which bindings it added — or, when it
+added none, that it added none. The binding set names subtrees of the provider,
+not of the consumer, so it does not vary per repository; a project that later
+opens a `standardNode(...)` needs no second migration. `standard-nodes` is
+optional at build time, and the generated links are gitignored, so the extra
+link changes no graph and appears in no diff. The full reasoning, including the
+measurement it was decided on, is in `migrate-bindings.py`'s module docstring
+under "Why migration normalizes".
+
+Because it normalizes, migration also **refuses to create a binding the
+repository would not validate**. If a `skill-project.toml` encloses the project
+(searched upward, bounded by the enclosing Git repository), every generated
+binding must appear in a `[[vendored]]` `paths` list, compared by resolved
+physical path. `skill-manager project resolve` classifies declared paths only,
+so an undeclared generated link is not a lax check — it is no check, and a link
+that resolves into a foreign home would report clean. The refusal happens before
+the first write and prints the exact TOML to add. Every run prints a
+`vendored-agreement:` verdict, including `not-applicable` when no
+`skill-project.toml` encloses the project, so silence never has to be
+interpreted.
+
 Do not edit generated binding paths from inside a consumer scaffold. Real SDK,
 plugin, or standard-node changes belong in `project_sdk_sources/sdk/`,
 `project_sdk_sources/build-logic/`, and `project_sdk_sources/standard-nodes/`

@@ -44,6 +44,17 @@ VALID_KINDS = {"testbed", "fixture", "action", "assertion", "evidence", "report"
 
 PROVIDER_BINDINGS_SCHEMA = "test-graph.provider-bindings.v1"
 PROVIDER_BINDINGS_MANIFEST = "provider-bindings.json"
+# The canonical binding set, and deliberately NOT a per-project one. It names
+# subtrees of the PROVIDER (this skill's project_sdk_sources/), so it is a
+# property of the provider rather than of whichever consumer is being bound;
+# `validate_provider_bindings_document` requires a manifest to declare exactly
+# these, which is what stops a hand-edited manifest binding an arbitrary path.
+#
+# Migration therefore normalizes a two-link legacy project up to three rather
+# than reproducing what it found. Do not "fix" that into a faithful 1:1 without
+# reading the decision recorded in migrate-bindings.py's module docstring under
+# "Why migration normalizes" - it was measured, not assumed, and the guard that
+# makes normalizing safe (`_require_vendored_agreement`) lives with it.
 PROVIDER_BINDINGS = {
     "build-logic": "project_sdk_sources/build-logic",
     "sdk": "project_sdk_sources/sdk",
