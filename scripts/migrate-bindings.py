@@ -57,10 +57,29 @@ Three arguments decided it:
    ``~/.skill-manager`` path in the tracked blob. A faithful 1:1 migration
    preserves that.
 
-3. **The cost is bounded and the links are inert.** ``standard-nodes`` is
-   optional at build time - ``ValidationGraphExtension.indexedSourcesDirs`` and
-   ``GraphAssembler.plan`` both guard on ``isDirectory`` - so the extra link
-   changes no graph. It is generated and gitignored, so it is not in any diff.
+3. **The cost is bounded, and the extra link is conditional rather than
+   inert.** ``standard-nodes`` is optional at build time -
+   ``ValidationGraphExtension.indexedSourcesDirs`` (``kt:38``) and
+   ``GraphAssembler.plan`` (``kt:34``) both guard on ``isDirectory`` - so an
+   absent catalog is not an error. But once the directory exists,
+   ``plan`` indexes it, and that opens two id-precedence paths which the next
+   reader must not assume away:
+
+   * ``GraphAssembler.kt:46-52`` - an explicit node whose id matches a catalog
+     node with a *different* runtime becomes a hard
+     ``error("node id '...' is reserved by the shipped standard-node catalog")``.
+     A project that built before materializing the link can stop building.
+   * ``GraphAssembler.kt:63-65`` - ``sourceIndex.putAll(standardIndex)`` runs
+     before the consumer directories' ``putIfAbsent``, so a ``dependsOn`` id
+     that previously hard-failed as an unresolved dependency now resolves
+     *silently* to a provider-owned node, which takes precedence over a
+     consumer script of the same id.
+
+   Neither has any effect on the migrated projects today: the shipped catalog is
+   two scripts (``monitoring_cluster_ensure``, ``monitoring_cluster_assert_ready``)
+   and none of the four two-link projects carries a node of either id. The
+   claim is "no shipped effect", measured - not "inert", which would be the
+   sentence that stops the next reader checking. It is generated and gitignored, so it is not in any diff.
 
 The real defect behind the complaint was never the extra link. It was that
 ``provider-bindings.json`` and the repository's ``[[vendored]]`` ``paths`` list
@@ -71,11 +90,20 @@ warning - it is invisible, and the one link that most needs checking is the one
 whose disguised relative text (``sdk/../standard-nodes``) resolves through a
 sibling into a foreign home.
 
+A fourth argument settled it for good, and #36's "one-line difference either
+way" framing is simply wrong because of it: ``validate_provider_bindings_document``
+requires a manifest's ``bindings`` to equal ``PROVIDER_BINDINGS`` **exactly**. A
+faithful 1:1 migration would have had to relax that from "exactly these three"
+to "any subset", deleting the only check that stops a hand-edited manifest from
+binding an arbitrary path.
+
 So normalizing is paired with :func:`_require_vendored_agreement`, which
-refuses - before the first write - to migrate a project whose enclosing
-``skill-project.toml`` would not validate every binding this run is about to
-create. After a successful migration the two records cannot disagree, because a
-run that would have made them disagree does not happen.
+refuses - before the first write - to migrate a project where a manifest already
+declares *some* of these bindings and not the rest. After a successful migration
+the two records cannot disagree, because a run that would have made them
+disagree does not happen. A project no manifest claims at all is reported rather
+than refused; that distinction, and why it is not a weakening, is documented on
+that function.
 
 (``scaffold.py`` writes the same manifest for a brand-new project and does not
 yet run this check; a scaffolded project can still reach the undeclared state.
@@ -108,7 +136,15 @@ from _common import (
     write_provider_bindings_manifest,
 )
 
-SKILL_PROJECT_MANIFEST = "skill-project.toml"
+#: Both names ``SkillProjectParser.findManifest`` accepts, in its order:
+#: ``PRIMARY_TOML_FILENAME`` then ``LEGACY_TOML_FILENAME``. Searching for only
+#: the first made this check blind to a repository whose sole manifest is the
+#: legacy one.
+PROJECT_MANIFEST_FILENAMES = ("skill-project.toml", "skill-manager-project.toml")
+
+#: Markers of an integration-repository root: a parent whose working tree holds
+#: constituent repositories as ordinary files. Used only as the search ceiling.
+INTEGRATION_ROOT_MARKERS = ("integration.toml", "INTEGRATION.md")
 
 #: Prefix of the one-line verdict every run prints for the two-record check.
 #: Named so a fan-out loop can grep it; a run that printed nothing would be
@@ -177,32 +213,94 @@ def _physical(path: Path) -> Path:
     return path.parent.resolve() / path.name
 
 
-def _enclosing_skill_project(root: Path) -> Path | None:
-    """The nearest ``skill-project.toml`` at or above the project.
+def _find_manifest(directory: Path) -> Path | None:
+    """One directory's project manifest, primary name first, then legacy.
 
-    The walk is bounded by the enclosing Git repository, not by a level count.
-    A count cannot express where the manifest is - a project sits one level
-    below its repository root (``<repo>/test_graph``) or three
-    (``<repo>/constituents/<c>/test_graph``) - and walking past the repository
-    would let an unrelated ancestor manifest on the operator's machine decide
-    whether this migration is allowed to proceed. Outside a Git repository
-    there is no committed second record at all, so only the project's own
-    parent directory is considered.
+    Both names, in this order, because that is what the reader of this record
+    accepts: ``SkillProjectParser.findManifest`` tries ``PRIMARY_TOML_FILENAME``
+    and then ``LEGACY_TOML_FILENAME``. Knowing only the primary name made this
+    check *vacuous* for a repository whose only manifest is the legacy one - it
+    would report "nothing encloses this project" about a manifest that
+    ``project resolve`` reads, which is the same class of bug as a search that
+    cannot see. Add a name here whenever that Java method gains one.
     """
 
-    top_level = _git_output(root, "rev-parse", "--show-toplevel")
-    ceiling = (
-        Path(top_level.stdout.strip()).resolve()
-        if top_level.returncode == 0
-        else root.resolve().parent
-    )
-    current = root.resolve().parent
-    while True:
-        candidate = current / SKILL_PROJECT_MANIFEST
+    for filename in PROJECT_MANIFEST_FILENAMES:
+        candidate = directory / filename
         if candidate.is_file():
             return candidate
+    return None
+
+
+def _manifest_search(root: Path) -> tuple[list[Path], str]:
+    """Directories to search for project manifests, and the ceiling reached.
+
+    Returns ``(directories nearest-first, a description of the ceiling)``. The
+    description is printed in the verdict: a bounded search that does not say
+    where it stopped cannot be told apart from one that looked everywhere.
+
+    The ceiling is chosen in two phases, and the order matters:
+
+    1. Scan all the way up for the nearest **integration root** - a directory
+       carrying ``integration.toml`` or ``INTEGRATION.md``. If one exists it is
+       the ceiling, inclusive, *whatever* ``.git`` directories sit below it.
+    2. Otherwise the nearest directory carrying ``.git``, inclusive.
+    3. Otherwise the filesystem root.
+
+    Phase 1 must be a global scan rather than a per-level test, and that is the
+    fix for a real defect in the first version of this check, which used
+    ``git rev-parse --show-toplevel``. In an integration repository a constituent
+    has its own ``.git`` in the parent's main working tree and **none** in an
+    outer worktree (see the integration repo's ``CLAUDE.md``, "Worktree care").
+    Any ``.git``-first rule therefore yields the constituent root in one tree and
+    something else in the other: identical bytes, two different ceilings,
+    flipping exactly where the fan-out runs. An integration root is always
+    *above* every constituent and is a tracked file present in every checkout
+    and worktree, so anchoring on it makes the ceiling independent of
+    constituent metadata.
+
+    Searching *above* a constituent's own repository is not an accident here, it
+    is required: ``meta-orchestrator`` deliberately keeps ONE manifest at its
+    root that declares vendored paths reaching into
+    ``constituents/<c>/test_graph/``, so for those projects the governing record
+    genuinely lives above them.
+
+    The ceiling only bounds how far the search looks. It is deliberately not
+    what decides the outcome - see :func:`_require_vendored_agreement`, where a
+    manifest counts only if it already declares a path inside this project.
+    That is what stops an integration root's manifest, which by design declares
+    nothing about a constituent's internals, from producing a refusal no one can
+    satisfy.
+    """
+
+    start = root.resolve().parent
+    ceiling: Path | None = None
+    reason = ""
+    current = start
+    while True:
+        if any((current / marker).exists() for marker in INTEGRATION_ROOT_MARKERS):
+            ceiling, reason = current, f"integration root {current}"
+            break
+        if current == current.parent:
+            break
+        current = current.parent
+    if ceiling is None:
+        current = start
+        while True:
+            if (current / ".git").exists():
+                ceiling, reason = current, f"repository root {current} (.git)"
+                break
+            if current == current.parent:
+                ceiling, reason = current, f"filesystem root {current}"
+                break
+            current = current.parent
+
+    directories: list[Path] = []
+    current = start
+    while True:
+        directories.append(current)
         if current == ceiling or current == current.parent:
-            return None
+            return directories, reason
         current = current.parent
 
 
@@ -239,82 +337,138 @@ def _declared_vendored_paths(manifest: Path) -> dict[Path, str]:
     return declared
 
 
-def _require_vendored_agreement(root: Path) -> str:
-    """Refuse a migration whose bindings the repository would not validate.
+def _require_vendored_agreement(root: Path) -> list[str]:
+    """Refuse a migration that would leave the two records disagreeing.
 
-    Returns the one-line verdict to print. Read-only, and called before the
-    first write for the same reason the provider is resolved there: a refusal
-    that costs the user nothing beats a committed record nothing checks.
+    Returns the verdict lines to print. Read-only, and called before the first
+    write for the same reason the provider is resolved there: a refusal that
+    costs the user nothing beats a committed record nothing checks.
 
-    The rule: if the repository declares a ``skill-project.toml`` at all, then
-    ``skill-manager project resolve`` is what validates this tree, and every
-    binding this run will generate has to be inside that validation. A binding
-    no ``[[vendored]]`` block names is not reported as an error or a warning by
-    ``ProjectVendoredResolver`` - it is never classified at all - so leaving one
-    undeclared is not a lax check, it is no check.
+    Three verdicts, and only one of them refuses. The distinction is the whole
+    design, so it is worth stating why:
 
-    Refusing rather than warning is deliberate. This script runs once per
-    repository, usually inside a fan-out loop over many of them; a warning on
-    stdout there is a warning nobody reads, and the resulting disagreement is
-    then committed and permanent. The remedy is one line of TOML, and the
-    refusal prints it.
+    ``ok``
+        Some manifest declares every binding this run will generate. Nothing to
+        do.
 
-    A repository with no ``skill-project.toml`` has no second record, so there
-    is nothing to disagree with. That verdict is printed too: a check that says
-    nothing when it found nothing is indistinguishable from a check that could
-    not look.
+    ``partial`` - **refuses**
+        A manifest declares *some* of this project's bindings and not the rest.
+        That is a genuine disagreement between two records of the same fact, it
+        is the shipped ``hyper-experiments-finance`` shape, and it is **always
+        satisfiable**: the remedy is to extend a ``[[vendored]]`` block that
+        already reaches into this project, which is by construction the right
+        record to edit.
+
+    ``unclaimed`` - reports, loudly, and proceeds
+        No manifest declares *any* of this project's bindings. Nothing will
+        validate them - a real problem, and the state
+        ``meta-orchestrator``'s own ``test_graph/`` is in - but it is the
+        *absence* of the second record, not a disagreement between two of them,
+        and refusing here is what makes the guard unsatisfiable. An integration
+        repository's root manifest declares nothing about a constituent's
+        internals **by design**, so a refusal in that position cannot be
+        cleared: an operator following the remedy would add
+        ``constituents/<c>/test_graph/...`` to the integration parent's
+        manifest, which is the wrong record entirely.
+
+    That split is also what makes the outcome independent of which tree the
+    migration runs in. The first version of this check refused in a worktree and
+    passed in the main working tree for identical bytes, because it keyed on
+    ``git rev-parse --show-toplevel`` and a constituent's ``.git`` exists only
+    in one of them. Now the ceiling anchors on the integration root
+    (:func:`_manifest_search`) and, more importantly, a manifest only counts
+    when it already declares a path inside this project - so a manifest that
+    claims nothing here cannot change the disposition however the search reaches
+    it.
+
+    Why the refusing case refuses rather than warns: this script runs once per
+    repository, usually inside a fan-out loop over many of them, and a warning
+    on stdout there is a warning nobody reads while the disagreement it
+    describes is committed and permanent.
+
+    Every verdict names the ceiling the search stopped at and the manifests it
+    found. "Nothing above this project" and "the search stopped at the ceiling"
+    are different facts, and printing them as one sentence would put a vacuous
+    claim inside the line that exists so silence never needs interpreting.
     """
 
-    manifest = _enclosing_skill_project(root)
-    if manifest is None:
-        return (
-            f"{VENDORED_AGREEMENT_PREFIX} not-applicable - no {SKILL_PROJECT_MANIFEST} "
-            f"encloses {root}, so `skill-manager project resolve` does not validate "
-            "these bindings and no second record can disagree with them"
-        )
-
-    declared = _declared_vendored_paths(manifest)
-    project_root = manifest.parent.resolve()
+    directories, ceiling = _manifest_search(root)
+    manifests = [found for found in map(_find_manifest, directories) if found is not None]
     wanted = {name: _physical(root / name) for name in sorted(PROVIDER_BINDINGS)}
-    undeclared = sorted(name for name, path in wanted.items() if path not in declared)
-    if not undeclared:
-        owners = sorted({declared[path] for path in wanted.values()})
-        return (
-            f"{VENDORED_AGREEMENT_PREFIX} ok - all {len(wanted)} managed bindings are "
-            f"declared by [[vendored]] {', '.join(owners)} in {manifest}"
+
+    # Nearest-first: the first manifest that claims ANY of this project's
+    # bindings is the record that governs them. A nearer manifest that claims
+    # none of them is not a governing record and must not mask one above it.
+    for manifest in manifests:
+        declared = _declared_vendored_paths(manifest)
+        claimed = {name: path for name, path in wanted.items() if path in declared}
+        if not claimed:
+            continue
+        undeclared = sorted(name for name in wanted if name not in claimed)
+        owners = sorted({declared[path] for path in claimed.values()})
+        if not undeclared:
+            return [
+                f"{VENDORED_AGREEMENT_PREFIX} ok - all {len(wanted)} managed bindings "
+                f"are declared by [[vendored]] {', '.join(owners)} in {manifest}",
+                f"    search ceiling: {ceiling}",
+            ]
+        relative = _relative_binding_paths(root, manifest.parent.resolve())
+        raise ProviderBindingError(
+            f"{manifest} declares {len(claimed)} of the {len(wanted)} bindings this "
+            "migration generates and would not validate the "
+            f"{len(undeclared)} remaining: " + ", ".join(undeclared) + ".\n"
+            "  `skill-manager project resolve` classifies DECLARED [[vendored]] paths "
+            "only, so an undeclared generated link is not a warning - it is never "
+            "checked, and a link that resolves into a foreign home reports clean.\n"
+            "  Refusing before writing anything so the committed manifest and the "
+            "[[vendored]] paths cannot disagree. Add the missing path(s) to the "
+            f"existing [[vendored]] block {', '.join(owners)}, so its `paths` reads:\n"
+            f"    paths = [{', '.join(repr(entry) for entry in relative)}]\n"
+            f"  (search ceiling: {ceiling})"
         )
 
-    existing = sorted({declared[path] for name, path in wanted.items() if path in declared})
-    relative = [
-        (root.resolve() / name).relative_to(project_root).as_posix()
+    # Nothing claims these bindings. Say exactly which of the two shapes it is.
+    if manifests:
+        nearest = manifests[0]
+        found = (
+            f"{len(manifests)} project manifest(s) found, none declaring a path "
+            f"inside this project; nearest is {nearest}"
+        )
+        remedy_root = nearest.parent.resolve()
+    else:
+        found = (
+            "no project manifest found in "
+            f"{len(directories)} searched director{'y' if len(directories) == 1 else 'ies'} "
+            f"({', '.join(name for name in PROJECT_MANIFEST_FILENAMES)})"
+        )
+        remedy_root = root.resolve().parent
+    relative = _relative_binding_paths(root, remedy_root)
+    return [
+        f"{VENDORED_AGREEMENT_PREFIX} unclaimed - `skill-manager project resolve` "
+        f"validates NONE of the {len(wanted)} managed bindings this run generates: "
+        + f"{found}",
+        f"    search ceiling: {ceiling}",
+        "    nothing can disagree, because there is no second record; to get these "
+        "bindings validated, declare them in the manifest that owns this project:",
+        "      [[vendored]]",
+        '      name = "test-graph-sdk"',
+        f"      paths = [{', '.join(repr(entry) for entry in relative)}]",
+        '      from_unit = "test-graph"',
+        '      from_subpath = "project_sdk_sources"',
+        '      on_invalid = "error"',
+    ]
+
+
+def _relative_binding_paths(root: Path, project_root: Path) -> list[str]:
+    """This project's binding paths as a manifest at ``project_root`` spells them."""
+
+    resolved = root.resolve()
+    return [
+        (resolved / name).relative_to(project_root).as_posix()
+        if project_root in (resolved / name).parents
+        else str(resolved / name)
         for name in sorted(PROVIDER_BINDINGS)
     ]
-    if existing:
-        remedy = (
-            "add the missing path(s) to the existing [[vendored]] block "
-            f"{', '.join(existing)}, so its `paths` reads:\n"
-            f"  paths = [{', '.join(repr(entry) for entry in relative)}]"
-        )
-    else:
-        remedy = (
-            "declare them, for example:\n"
-            "  [[vendored]]\n"
-            '  name = "test-graph-sdk"\n'
-            f"  paths = [{', '.join(repr(entry) for entry in relative)}]\n"
-            '  from_unit = "test-graph"\n'
-            '  from_subpath = "project_sdk_sources"\n'
-            '  on_invalid = "error"'
-        )
-    raise ProviderBindingError(
-        f"{manifest} would not validate {len(undeclared)} of the "
-        f"{len(wanted)} bindings this migration generates: "
-        + ", ".join(undeclared)
-        + ". `skill-manager project resolve` classifies DECLARED [[vendored]] paths "
-        "only, so an undeclared generated link is not a warning - it is never "
-        "checked, and a link that resolves into a foreign home reports clean. "
-        "Refusing before writing anything so the committed manifest and the "
-        f"[[vendored]] paths cannot disagree; {remedy}"
-    )
 
 
 def _require_workspace_provider(root: Path, workspace_provider: str) -> None:
@@ -484,7 +638,8 @@ def main() -> int:
             "  normalized to the canonical binding set; generated links the "
             "project did not have: none (1:1 with the links found)"
         )
-    print("  " + agreement)
+    for line in agreement:
+        print("  " + line)
     print("  review provider-bindings.json, .gitignore, and git status; then commit them")
     return 0
 
