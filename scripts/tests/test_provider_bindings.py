@@ -58,8 +58,15 @@ def _git(repo: Path, *arguments: str) -> str:
     ).stdout
 
 
-def _legacy_git_project(parent: Path) -> tuple[Path, Path, Path]:
+def _legacy_git_project(
+    parent: Path,
+    bindings: tuple[str, ...] | None = None,
+) -> tuple[Path, Path, Path]:
     """A committed pre-managed scaffold: tracked links, no manifest.
+
+    ``bindings`` selects which of the three legacy links the project tracked;
+    the default is all three. Two-link projects are the real population this
+    matters for - four of the eight projects in the first rollout were one.
 
     Returns ``(repo, test_graph_root, provider_root)``.
     """
@@ -72,6 +79,8 @@ def _legacy_git_project(parent: Path) -> tuple[Path, Path, Path]:
     )
     provider = _provider_root(repo)
     for name, relative in _common.PROVIDER_BINDINGS.items():
+        if bindings is not None and name not in bindings:
+            continue
         os.symlink(provider / relative, root / name, target_is_directory=True)
     (repo / "keep.txt").write_text("keep\n", encoding="utf-8")
     for command in (
@@ -83,6 +92,87 @@ def _legacy_git_project(parent: Path) -> tuple[Path, Path, Path]:
     ):
         _git(repo, *command)
     return repo, root, provider
+
+
+def _skill_project(
+    project_root: Path,
+    paths: list[str] | None,
+    filename: str = "skill-project.toml",
+) -> Path:
+    """A project manifest, optionally carrying one ``[[vendored]]`` block.
+
+    ``paths is None`` writes a manifest with no ``[[vendored]]`` at all, which
+    is the shape ``meta-orchestrator``'s own ``test_graph/`` is in: a project
+    manifest exists, so ``project resolve`` runs, and it validates none of the
+    generated bindings.
+
+    ``filename`` exists because ``SkillProjectParser.findManifest`` accepts
+    ``skill-manager-project.toml`` too; a search that knows only the primary
+    name is blind to a repository that uses the legacy one.
+    """
+    lines = [
+        "[project]",
+        'name = "fixture"',
+        'version = "0.1.0"',
+        "",
+        "[skills.test-graph]",
+        'source = "github:haydenrear/test_graph_skill"',
+        "",
+    ]
+    if paths is not None:
+        lines += [
+            "[[vendored]]",
+            'name = "test-graph-sdk"',
+            "paths = [" + ", ".join(f'"{entry}"' for entry in paths) + "]",
+            'from_unit = "test-graph"',
+            'from_subpath = "project_sdk_sources"',
+            'on_invalid = "error"',
+            "",
+        ]
+    manifest = project_root / filename
+    manifest.write_text("\n".join(lines), encoding="utf-8")
+    return manifest
+
+
+def _integration_constituent(parent: Path, with_constituent_git: bool) -> tuple[Path, Path, Path]:
+    """The integration-repository shape, with and without constituent ``.git``.
+
+    An integration parent tracks constituent repositories as ordinary files. In
+    the parent's MAIN working tree each constituent carries its own ``.git``; in
+    an outer WORKTREE none of them does. Nothing else differs, so any check
+    whose answer changes between these two fixtures is keying on metadata that
+    is an artifact of which tree it happens to be run in.
+
+    Returns ``(integration_root, test_graph_root, provider_root)``. No ``.git``
+    anywhere at the integration root either, so the ceiling cannot fall back to
+    the parent repository's own metadata.
+    """
+    integration = parent / "integration-parent"
+    constituent = integration / "constituents" / "foo"
+    root = constituent / "test_graph"
+    root.mkdir(parents=True)
+    (root / "settings.gradle.kts").write_text(
+        'rootProject.name = "fixture"\n', encoding="utf-8"
+    )
+    (root / "build.gradle.kts").write_text("validationGraph { }\n", encoding="utf-8")
+    provider = _provider_root(constituent)
+    for name in ("sdk", "build-logic"):
+        os.symlink(
+            provider / _common.PROVIDER_BINDINGS[name],
+            root / name,
+            target_is_directory=True,
+        )
+    (integration / "integration.toml").write_text(
+        '[integration]\nname = "fixture-integration"\nhost = "github"\n\n'
+        '[[constituent]]\nname = "foo"\npath = "constituents/foo"\n',
+        encoding="utf-8",
+    )
+    # The integration parent's own manifest. It declares nothing about a
+    # constituent's internals, which is exactly how the real one is written.
+    _skill_project(integration, None)
+    if with_constituent_git:
+        (constituent / ".git").mkdir()
+    return integration, root, provider
 
 
 def _skill_install_without_provider(parent: Path) -> Path:
@@ -637,6 +727,449 @@ class MigrationAtomicityTest(unittest.TestCase):
 
             self.assertEqual(status_before, _git(repo, "status", "--porcelain"))
             self.assertEqual(listed_before, _git(repo, "ls-files", "-s"))
+
+
+class CanonicalBindingSetTest(unittest.TestCase):
+    """Migration normalizes up to the canonical set, and cannot do it quietly.
+
+    Two propositions, tested separately because they fail separately:
+
+    1. A two-link project gains ``standard-nodes`` and the run SAYS which
+       bindings it added; a three-link project says, in a distinguishable
+       sentence, that it added none. A report that only appears when something
+       happened is indistinguishable from a report that was never written.
+
+    2. A project whose ``skill-project.toml`` would not validate every binding
+       this run generates is refused BEFORE the first write.
+       ``ProjectVendoredResolver.check`` iterates declared paths only, so an
+       undeclared generated link is neither an error nor a warning - it is
+       never classified - which is why the disagreement has to be prevented
+       rather than reported downstream.
+    """
+
+    def _migrate(self, root: Path, provider: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "migrate-bindings.py"),
+                "--test-graph-root",
+                str(root),
+                "--workspace-provider",
+                os.path.relpath(provider, root),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    # ------------------------------------------------------------ half one
+
+    def test_a_two_link_project_names_the_binding_it_gained(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(
+                parent, bindings=("sdk", "build-logic")
+            )
+            self.assertFalse((root / "standard-nodes").exists())
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn(
+                "generated links the project did not have: standard-nodes",
+                completed.stdout,
+            )
+            # Bytes, not the exit code: the manifest that was actually written.
+            document = json.loads(
+                _common.provider_bindings_manifest(root).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["build-logic", "sdk", "standard-nodes"],
+                sorted(document["bindings"]),
+            )
+            for name in _common.PROVIDER_BINDINGS:
+                self.assertTrue((root / name).is_symlink(), name)
+                self.assertTrue((root / name).resolve().is_dir(), name)
+
+    def test_a_three_link_project_says_it_added_nothing(self) -> None:
+        """The other half. Without it, a report that never fires still passes."""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(parent)
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn(
+                "generated links the project did not have: none "
+                "(1:1 with the links found)",
+                completed.stdout,
+            )
+            self.assertNotIn(
+                "generated links the project did not have: standard-nodes",
+                completed.stdout,
+            )
+
+    # ------------------------------------------------------------ half two
+
+    def test_a_partial_vendored_declaration_is_refused_before_any_write(self) -> None:
+        """Two of three declared: the shipped hyper-experiments-finance shape."""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(
+                parent, bindings=("sdk", "build-logic")
+            )
+            _skill_project(
+                repo,
+                ["consumer/test_graph/sdk", "consumer/test_graph/build-logic"],
+            )
+            ignore_before = (root / ".gitignore").read_bytes()
+            status_before = _git(repo, "status", "--porcelain")
+            links_before = {
+                name: os.readlink(root / name)
+                for name in _common.PROVIDER_BINDINGS
+                if (root / name).is_symlink()
+            }
+
+            completed = self._migrate(root, provider)
+
+            # State first: an exit-code assertion would pass on a script that
+            # refused after writing the manifest, which is the worse outcome.
+            self.assertFalse(
+                _common.provider_bindings_manifest(root).exists(),
+                "the refusal wrote a manifest the [[vendored]] block does not cover",
+            )
+            self.assertEqual(ignore_before, (root / ".gitignore").read_bytes())
+            self.assertEqual(status_before, _git(repo, "status", "--porcelain"))
+            self.assertEqual(
+                links_before,
+                {
+                    name: os.readlink(root / name)
+                    for name in _common.PROVIDER_BINDINGS
+                    if (root / name).is_symlink()
+                },
+            )
+            self.assertFalse((root / "standard-nodes").exists())
+            self.assertNotEqual(0, completed.returncode, completed.stdout)
+            self.assertIn(
+                "declares 2 of the 3 bindings this migration generates and would "
+                "not validate the 1 remaining: standard-nodes",
+                completed.stderr,
+            )
+            self.assertIn("test-graph-sdk", completed.stderr)
+            self.assertIn(
+                "'consumer/test_graph/standard-nodes'",
+                completed.stderr,
+                "the refusal must print the paths list to paste back",
+            )
+
+    def test_a_manifest_claiming_nothing_here_reports_rather_than_deadlocks(
+        self,
+    ) -> None:
+        """meta-orchestrator's own test_graph: nothing validates these bindings.
+
+        Reported, not refused. A manifest that claims none of this project's
+        paths may be an integration parent's, whose manifest declares nothing
+        about a constituent's internals by design - refusing there is a block no
+        operator can clear. The report must still be unmissable.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(parent)
+            _skill_project(repo, None)
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn(
+                "vendored-agreement: unclaimed - `skill-manager project resolve` "
+                "validates NONE of the 3 managed bindings this run generates",
+                completed.stdout,
+            )
+            self.assertIn(
+                "none declaring a path inside this project; nearest is",
+                completed.stdout,
+            )
+            self.assertIn("[[vendored]]", completed.stdout)
+            self.assertIn('from_subpath = "project_sdk_sources"', completed.stdout)
+            # Bytes: it really did migrate.
+            document = json.loads(
+                _common.provider_bindings_manifest(root).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["build-logic", "sdk", "standard-nodes"], sorted(document["bindings"])
+            )
+
+    def test_a_legacy_named_manifest_is_searched_too(self) -> None:
+        """F2: findManifest accepts skill-manager-project.toml as well.
+
+        A search that knows only the primary name reports "no manifest" about a
+        manifest `project resolve` reads, and then materializes the very
+        undeclared binding this guard exists to prevent - a zero that means
+        "could not look" reported as "looked and found nothing".
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(
+                parent, bindings=("sdk", "build-logic")
+            )
+            _skill_project(
+                repo,
+                ["consumer/test_graph/sdk", "consumer/test_graph/build-logic"],
+                filename="skill-manager-project.toml",
+            )
+            self.assertFalse((repo / "skill-project.toml").exists())
+
+            completed = self._migrate(root, provider)
+
+            self.assertFalse(
+                _common.provider_bindings_manifest(root).exists(),
+                "the legacy manifest was not searched, so the guard let the "
+                "undeclared binding through",
+            )
+            self.assertFalse((root / "standard-nodes").exists())
+            self.assertNotEqual(0, completed.returncode, completed.stdout)
+            self.assertIn("skill-manager-project.toml", completed.stderr)
+            self.assertIn(
+                "would not validate the 1 remaining: standard-nodes", completed.stderr
+            )
+
+    def test_the_verdict_does_not_depend_on_constituent_git_metadata(self) -> None:
+        """F1: identical bytes, constituent .git present or not, one answer.
+
+        In an integration repository a constituent carries its own ``.git`` in
+        the parent's main working tree and none in an outer worktree. Keying the
+        search ceiling on ``git rev-parse --show-toplevel`` therefore gave two
+        different verdicts for the same tree, and refused in the worktree - the
+        tree the fan-out actually runs in - with a remedy pointing at the
+        integration parent's manifest, the wrong record entirely.
+        """
+        verdicts = {}
+        for with_git in (False, True):
+            with tempfile.TemporaryDirectory() as temporary:
+                parent = Path(temporary)
+                integration, root, provider = _integration_constituent(
+                    parent, with_constituent_git=with_git
+                )
+                self.assertEqual(
+                    with_git, (integration / "constituents" / "foo" / ".git").exists()
+                )
+                self.assertFalse((integration / ".git").exists())
+
+                completed = self._migrate(root, provider)
+
+                # Bytes, both times: the migration completed.
+                document = json.loads(
+                    _common.provider_bindings_manifest(root).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    ["build-logic", "sdk", "standard-nodes"],
+                    sorted(document["bindings"]),
+                    f"with_constituent_git={with_git}",
+                )
+                self.assertTrue((root / "standard-nodes").is_symlink())
+                verdict = [
+                    line.strip()
+                    for line in completed.stdout.splitlines()
+                    if "vendored-agreement:" in line
+                ]
+                self.assertEqual(1, len(verdict), completed.stdout)
+                ceiling = [
+                    line.split("search ceiling:", 1)[1]
+                    .strip()
+                    .replace(str(parent.resolve()), "")
+                    for line in completed.stdout.splitlines()
+                    if "search ceiling:" in line
+                ]
+                self.assertEqual(1, len(ceiling), completed.stdout)
+                verdicts[with_git] = (
+                    completed.returncode,
+                    verdict[0].split(" - ")[0],
+                    ceiling[0],
+                )
+
+        self.assertEqual(
+            verdicts[False],
+            verdicts[True],
+            "the verdict or the ceiling flipped on constituent .git metadata alone",
+        )
+        self.assertEqual(
+            (
+                0,
+                "vendored-agreement: unclaimed",
+                "integration root /integration-parent",
+            ),
+            verdicts[True],
+            "an integration parent's manifest must not produce an unsatisfiable refusal",
+        )
+
+    def test_no_manifest_and_a_manifest_claiming_nothing_read_differently(self) -> None:
+        """F2b: two different facts must not print as one sentence.
+
+        Both are ``unclaimed``, but "there is no manifest above this project"
+        and "a manifest exists and claims none of these paths" are different
+        findings, and the verdict line exists precisely so that a reader never
+        has to guess which one happened.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(parent)
+            absent = self._migrate(root, provider)
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(parent)
+            _skill_project(repo, None)
+            present = self._migrate(root, provider)
+
+        self.assertEqual(0, absent.returncode, absent.stderr)
+        self.assertEqual(0, present.returncode, present.stderr)
+        self.assertIn(
+            "no project manifest found in 2 searched directories "
+            "(skill-project.toml, skill-manager-project.toml)",
+            absent.stdout,
+        )
+        self.assertNotIn("none declaring a path inside this project", absent.stdout)
+        self.assertIn(
+            "none declaring a path inside this project; nearest is", present.stdout
+        )
+        self.assertNotIn("no project manifest found in", present.stdout)
+        # Both must name the ceiling they stopped at.
+        for completed in (absent, present):
+            self.assertIn("search ceiling: repository root", completed.stdout)
+
+    def test_a_complete_vendored_declaration_migrates_and_reports_agreement(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo, root, provider = _legacy_git_project(
+                parent, bindings=("sdk", "build-logic")
+            )
+            _skill_project(
+                repo,
+                [
+                    "consumer/test_graph/sdk",
+                    "consumer/test_graph/build-logic",
+                    "consumer/test_graph/standard-nodes",
+                ],
+            )
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn(
+                "vendored-agreement: ok - all 3 managed bindings are declared",
+                completed.stdout,
+            )
+            self.assertIn("test-graph-sdk", completed.stdout)
+
+    def test_a_project_with_no_manifest_says_so_rather_than_nothing(self) -> None:
+        """A silent pass and an unchecked pass must not look the same."""
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(parent)
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn("vendored-agreement: unclaimed", completed.stdout)
+            self.assertIn("no project manifest found in", completed.stdout)
+            self.assertIn("search ceiling:", completed.stdout)
+
+    def test_a_manifest_outside_the_repository_is_not_consulted(self) -> None:
+        """The search is bounded, and the bound is named in the verdict.
+
+        The out-of-repo manifest here DECLARES all three paths, so an unbounded
+        search would report ``ok`` on the strength of a manifest above the
+        checkout. This is not hypothetical: an earlier mutation run of this
+        suite found a stray ``skill-project.toml`` sitting directly in ``$TMPDIR``,
+        written by an unrelated process on this machine.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            _repo, root, provider = _legacy_git_project(parent)
+            outside = _skill_project(
+                parent,
+                [
+                    "repo/consumer/test_graph/sdk",
+                    "repo/consumer/test_graph/build-logic",
+                    "repo/consumer/test_graph/standard-nodes",
+                ],
+            )
+            self.assertTrue(outside.is_file())
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn("vendored-agreement: unclaimed", completed.stdout)
+            self.assertNotIn(
+                "vendored-agreement: ok",
+                completed.stdout,
+                "a manifest above the repository decided the verdict",
+            )
+            self.assertNotIn(str(outside), completed.stdout)
+
+    def test_a_declaration_under_an_absolute_parent_link_still_matches(self) -> None:
+        """The disguised shape, on the declaration side.
+
+        ``consumer/`` is an ABSOLUTE symlink, so the declared path
+        ``consumer/test_graph/sdk`` is relative text whose parent resolves
+        somewhere else entirely. A lexical comparison against the project root
+        this migration was handed calls those two paths different and refuses a
+        correctly declared project; only comparing resolved physical parents
+        gets it right. This is the same shape that defeated three earlier
+        checks in this repository.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            repo = parent / "repo"
+            real = repo / "real"
+            root = real / "consumer" / "test_graph"
+            root.mkdir(parents=True)
+            (root / "settings.gradle.kts").write_text(
+                'rootProject.name = "fixture"\n', encoding="utf-8"
+            )
+            (root / "build.gradle.kts").write_text(
+                "validationGraph { }\n", encoding="utf-8"
+            )
+            provider = _provider_root(repo)
+            for name in ("sdk", "build-logic"):
+                os.symlink(
+                    provider / _common.PROVIDER_BINDINGS[name],
+                    root / name,
+                    target_is_directory=True,
+                )
+            # Absolute link text, and it is the PARENT of the declared paths.
+            os.symlink(real / "consumer", repo / "consumer", target_is_directory=True)
+            self.assertTrue(Path(os.readlink(repo / "consumer")).is_absolute())
+            _skill_project(
+                repo,
+                [
+                    "consumer/test_graph/sdk",
+                    "consumer/test_graph/build-logic",
+                    "consumer/test_graph/standard-nodes",
+                ],
+            )
+            for command in (
+                ["init", "-q"],
+                ["config", "user.name", "Test Graph"],
+                ["config", "user.email", "test-graph@example.invalid"],
+                ["add", "."],
+                ["commit", "-q", "-m", "legacy scaffold behind a linked parent"],
+            ):
+                _git(repo, *command)
+
+            completed = self._migrate(root, provider)
+
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            self.assertIn(
+                "vendored-agreement: ok - all 3 managed bindings are declared",
+                completed.stdout,
+            )
+            self.assertIn(
+                "generated links the project did not have: standard-nodes",
+                completed.stdout,
+            )
 
 
 if __name__ == "__main__":

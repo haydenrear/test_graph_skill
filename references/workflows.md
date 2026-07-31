@@ -562,6 +562,49 @@ and stages removal of only the three generated links from Git's index. Review
 and commit those changes. `prepare-bindings.py` is the explicit idempotent
 materialization command; normal wrapper use does not require calling it.
 
+Migration writes the **canonical three-binding set** even when the legacy
+project tracked only two links, and prints which bindings it added — or, when it
+added none, that it added none. The binding set names subtrees of the provider,
+not of the consumer, so it does not vary per repository; a project that later
+opens a `standardNode(...)` needs no second migration. `standard-nodes` is
+optional at build time and the generated links are gitignored, so the extra link
+has no effect on the migrated projects — though it is *conditional*, not inert:
+once the directory exists the catalog is indexed and provider node ids take
+precedence over consumer ones. The full reasoning, the measurement it was
+decided on, and the two precedence paths to check are in
+`migrate-bindings.py`'s module docstring under "Why migration normalizes".
+
+Because it normalizes, migration also checks the generated bindings against the
+project manifest before writing anything, and prints one of three
+`vendored-agreement:` verdicts. Every verdict names the search ceiling it
+stopped at.
+
+| verdict | meaning | outcome |
+| --- | --- | --- |
+| `ok` | some manifest declares all three bindings | migrates |
+| `partial` | a manifest declares some of them and not the rest | **refuses**, prints the `paths` list to paste back |
+| `unclaimed` | no manifest declares any of them | migrates, reports that nothing validates them, prints the block to add |
+
+`skill-manager project resolve` classifies declared `[[vendored]]` paths only,
+so an undeclared generated link is not a lax check — it is no check, and a link
+that resolves into a foreign home would report clean. `partial` is a genuine
+disagreement between two records of the same fact and is always fixable by
+extending a block that already reaches into the project, so it refuses.
+`unclaimed` is the *absence* of the second record: it is reported rather than
+refused, because an integration repository's root manifest declares nothing
+about a constituent's internals by design and a refusal there could not be
+cleared.
+
+Manifests are searched nearest-first under both names
+`SkillProjectParser.findManifest` accepts (`skill-project.toml`, then
+`skill-manager-project.toml`), and a manifest counts only when it already
+declares a path inside the project, compared by resolved physical path. The
+ceiling is the nearest enclosing **integration root** (`integration.toml` or
+`INTEGRATION.md`) if there is one, otherwise the nearest `.git`. It is
+deliberately not `git rev-parse --show-toplevel`: a constituent carries `.git`
+in an integration parent's main working tree and none in an outer worktree, so
+that ceiling gave two different answers for identical bytes.
+
 Do not edit generated binding paths from inside a consumer scaffold. Real SDK,
 plugin, or standard-node changes belong in `project_sdk_sources/sdk/`,
 `project_sdk_sources/build-logic/`, and `project_sdk_sources/standard-nodes/`
