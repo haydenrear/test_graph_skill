@@ -4,11 +4,70 @@ private val VALID_NODE_ID = Regex("[a-z0-9._-]{1,128}")
 
 internal fun isValidNodeId(nodeId: String): Boolean = VALID_NODE_ID.matches(nodeId)
 
-internal fun requireValidNodeId(nodeId: String, label: String = "node id"): String {
+/**
+ * The grammar is intentional and documented; this is about what the REFUSAL
+ * says when a script breaks it.
+ *
+ * It used to say only `node id must match [a-z0-9._-]{1,128}` — no rejected
+ * value, no source. In a graph of one node that is enough; in a graph of
+ * twenty it names nothing, and the reader has to open every script to find the
+ * one that is wrong. Measured cost: real diagnosis time, and on one occasion a
+ * wrong root cause that survived unchallenged because the message pointed
+ * nowhere.
+ *
+ * So the message carries the two things the reader is about to go looking for:
+ * the value that was rejected, and — when the caller knows it — the file that
+ * declared it. [renderRejectedNodeId] keeps that value readable: a trailing
+ * newline or a control character is exactly the kind of id that gets rejected,
+ * and pasting it raw into an error message hides the defect it is reporting.
+ */
+internal fun requireValidNodeId(
+    nodeId: String,
+    label: String = "node id",
+    source: String? = null,
+): String {
     require(isValidNodeId(nodeId)) {
-        "$label must match [a-z0-9._-]{1,128}"
+        buildString {
+            append(label)
+            append(" must match [a-z0-9._-]{1,128}, but was ")
+            append(renderRejectedNodeId(nodeId))
+            if (!source.isNullOrBlank()) {
+                append(" (declared by ")
+                append(source)
+                append(")")
+            }
+        }
     }
     return nodeId
+}
+
+/** Longest rejected id rendered in full before it is elided. */
+private const val MAX_RENDERED_NODE_ID = 160
+
+/**
+ * A rejected id, quoted, with invisible characters escaped and the true length
+ * stated. The length matters on its own: an id that is over 128 characters
+ * looks perfectly well-formed, so "but was <160 legible characters>" without a
+ * count reads as if the grammar itself were wrong.
+ */
+private fun renderRejectedNodeId(nodeId: String): String {
+    val escaped = buildString {
+        for (ch in nodeId) {
+            when {
+                ch == '\\' -> append("\\\\")
+                ch == '"' -> append("\\\"")
+                ch == '\n' -> append("\\n")
+                ch == '\r' -> append("\\r")
+                ch == '\t' -> append("\\t")
+                ch.isISOControl() -> append("\\u%04x".format(ch.code))
+                else -> append(ch)
+            }
+        }
+    }
+    val shown =
+        if (escaped.length <= MAX_RENDERED_NODE_ID) escaped
+        else escaped.take(MAX_RENDERED_NODE_ID) + "..."
+    return "\"$shown\" (length ${nodeId.length})"
 }
 
 /**
@@ -48,7 +107,11 @@ data class ValidationNodeSpec(
     val reports: ReportsSpec = ReportsSpec(),
 ) {
     init {
-        requireValidNodeId(id)
+        // The runtime already carries the script this spec was described from,
+        // so the refusal can name the file to open. This is the case that costs
+        // the most to diagnose without it: `indexDir` describes every script in
+        // a directory, and the failure surfaces with no indication of which one.
+        requireValidNodeId(id, source = runtime.entryFile)
     }
 
     fun sideEffectSpecs(): Set<SideEffectSpec> =
