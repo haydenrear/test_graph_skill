@@ -353,7 +353,14 @@ private fun waitForHandlesToExit(
     }
 }
 
-private const val MAX_TRACKED_DESCENDANTS = 4_096
+// Cumulative, not concurrent: this map retains every descendant pid ever
+// observed for the node's whole lifetime. At 4_096 a legitimate ten-minute
+// Docker + Gradle image build tripped it by construction, and the overflow
+// path destroyForcibly()es the build's own children before declaring
+// ownership uncertain. The fork-bomb intent is about concurrent explosion,
+// which this never measured. Raised so real builds run; the tracking and
+// cleanup below are unchanged.
+private const val MAX_TRACKED_DESCENDANTS = 1_048_576
 private const val PROCESS_POLL_MILLIS = 100L
 private const val PROCESS_CLEANUP_POLL_MILLIS = 10L
 private const val PROCESS_TERM_GRACE_MILLIS = 1_000L
