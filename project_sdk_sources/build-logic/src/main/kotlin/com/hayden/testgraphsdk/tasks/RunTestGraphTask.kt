@@ -205,6 +205,18 @@ abstract class RunTestGraphTask : DefaultTask() {
         val reportDirFile = RunIds.allocate(reportRoot.get().asFile)
         val runId = reportDirFile.name
         val reportDir = project.layout.dir(project.provider { reportDirFile }).get()
+        // A resumed run inherits the prefix nodes' results and input context, but
+        // their artifacts stayed in the source report. Any node that reads an
+        // upstream node's artifact then fails on a path outside this report, which
+        // made resume unusable for exactly the long graphs it exists to serve.
+        // Carry them across so a resumed report is self-contained.
+        resumeFromBuildPath?.let { sourcePath ->
+            val sourceArtifacts = File(sourcePath, "artifacts")
+            if (sourceArtifacts.isDirectory) {
+                sourceArtifacts.copyRecursively(File(reportDirFile, "artifacts"), overwrite = false)
+                logger.lifecycle("carried forward artifacts/ from $sourcePath")
+            }
+        }
         RunReportWriter.persistExecutionScope(
             runDir = reportDirFile,
             graphName = graphSpec.name,
