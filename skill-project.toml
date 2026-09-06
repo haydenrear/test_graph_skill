@@ -47,8 +47,8 @@ description = "Scaffold a portable test_graph project, manage provider bindings,
 #     skill-manager.toml. skill-publisher is the authority on all of it and on
 #     the install/bind/sync round trip that ships an edit into a store ---
 
-[skills.skill-publisher]
-source = "github:haydenrear/skill-publisher-skill"
+[skills.unit-authoring]
+source = "github:haydenrear/skt"
 
 # --- required BY skill-publisher, not chosen here: its SKILL.md `skill-imports`
 #     names `skill-manager` (references/skill-imports.md), and `project resolve`
@@ -60,7 +60,7 @@ source = "github:haydenrear/skill-publisher-skill"
 #     rather than only transitive ---
 
 [skills.skill-manager]
-source = "github:haydenrear/skill-manager-skill"
+source = "github:haydenrear/skt"
 
 # --- REPO-SPECIFIC DECISION: deploy-helm is deliberately NOT declared, even
 #     though this unit's own skill-manager.toml lists
